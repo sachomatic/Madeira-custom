@@ -1,0 +1,165 @@
+diff --git a/src/launch.c b/src/launch.c
+index 425f6dc..40be7c0 100644
+--- a/src/launch.c
++++ b/src/launch.c
+@@ -179,13 +179,30 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
+         !method_is(module, manager, 5, layout->install_dir)) return 40;
+     char option_text[16] = {0};
+     uint32_t launch_option = 0;
++    /* Per-game entries first (MADEIRA_DOCK_LAUNCH_OPTIONS = "APPID:KEY,..."),
++     * then the single entry the app passes for this launch, then key 0. */
++    static char option_list[1024];
+     SetLastError(ERROR_SUCCESS);
+-    DWORD option_length = GetEnvironmentVariableA("MADEIRA_STEAM_HOST_LAUNCH_OPTION", option_text, sizeof(option_text));
+-    if ((!option_length && GetLastError() != ERROR_ENVVAR_NOT_FOUND) || option_length >= sizeof(option_text) ||
+-        (option_length && !sh_parse_launch_option(option_text, &launch_option))) {
+-        o->event("launch-option-invalid", 1);
++    DWORD list_length = GetEnvironmentVariableA("MADEIRA_DOCK_LAUNCH_OPTIONS", option_list, sizeof(option_list));
++    if ((!list_length && GetLastError() != ERROR_ENVVAR_NOT_FOUND) || list_length >= sizeof(option_list)) {
++        o->event("launch-option-invalid", 2);
+         return 45;
+     }
++    int listed = list_length ? sh_find_launch_option(option_list, appid, &launch_option) : 0;
++    if (listed < 0) {
++        o->event("launch-option-invalid", 2);
++        return 45;
++    }
++    if (!listed) {
++        SetLastError(ERROR_SUCCESS);
++        DWORD option_length = GetEnvironmentVariableA("MADEIRA_STEAM_HOST_LAUNCH_OPTION", option_text, sizeof(option_text));
++        if ((!option_length && GetLastError() != ERROR_ENVVAR_NOT_FOUND) || option_length >= sizeof(option_text) ||
++            (option_length && !sh_parse_launch_option(option_text, &launch_option))) {
++            o->event("launch-option-invalid", 1);
++            return 45;
++        }
++    }
++    o->event("launch-option-listed", listed);
+     o->event("launch-option-index", (int32_t)launch_option);
+     static char actual_utf8[32768];
+     static wchar_t actual[32768], expected[32768], normalized[32768];
+diff --git a/src/validation.c b/src/validation.c
+index 542169d..1ad9e01 100644
+--- a/src/validation.c
++++ b/src/validation.c
+@@ -31,6 +31,60 @@ bool sh_launch_option_missing(const void *payload, size_t size, uint32_t option)
+     int length = snprintf(expected, sizeof(expected), "entry for launch option %u not found", (unsigned)option);
+     return length > 0 && (size_t)length < sizeof(expected) && strstr(detail, expected) != NULL;
+ }
++static const char *skip_spaces(const char *p)
++{
++    while (*p == ' ' || *p == '	') ++p;
++    return p;
++}
++
++/* Up to 10 decimal digits within [0, max]; no sign, no leading zeros beyond "0". */
++static const char *parse_bounded(const char *p, uint32_t max, uint32_t *value)
++{
++    uint32_t v = 0;
++    unsigned digits = 0;
++    while (*p >= '0' && *p <= '9') {
++        unsigned d = (unsigned)(*p - '0');
++        if (digits == 1 && v == 0) return NULL;
++        if (++digits > 10 || v > (max - d) / 10) return NULL;
++        v = v * 10 + d;
++        ++p;
++    }
++    if (!digits) return NULL;
++    *value = v;
++    return p;
++}
++
++int sh_find_launch_option(const char *list, uint32_t appid, uint32_t *option)
++{
++    if (!list || !option) return -1;
++    uint32_t seen[64];
++    unsigned count = 0;
++    int found = 0;
++    uint32_t chosen = 0;
++    const char *p = skip_spaces(list);
++    if (!*p) return 0;
++    for (;;) {
++        uint32_t app = 0, key = 0;
++        p = parse_bounded(p, UINT32_MAX, &app);
++        if (!p || app == 0) return -1;
++        p = skip_spaces(p);
++        if (*p++ != ':') return -1;
++        p = parse_bounded(skip_spaces(p), (uint32_t)INT32_MAX, &key);
++        if (!p) return -1;
++        for (unsigned i = 0; i < count; ++i)
++            if (seen[i] == app) return -1;
++        if (count == 64) return -1;
++        seen[count++] = app;
++        if (app == appid) { found = 1; chosen = key; }
++        p = skip_spaces(p);
++        if (!*p) break;
++        if (*p++ != ',') return -1;
++        p = skip_spaces(p);
++    }
++    if (found) *option = chosen;
++    return found;
++}
++
+ bool sh_subscription_list_contains(const uint32_t *apps, int32_t count,
+                                    size_t capacity, uint32_t requested)
+ {
+diff --git a/src/validation.h b/src/validation.h
+index dc5b30f..75f8d1f 100644
+--- a/src/validation.h
++++ b/src/validation.h
+@@ -19,6 +19,10 @@ bool sh_launch_error_waits_for_session(int32_t error);
+ bool sh_parse_launch_option(const char *text, uint32_t *option);
+ /* Recognize only the client's bounded missing-entry diagnostic; never log it. */
+ bool sh_launch_option_missing(const void *payload, size_t size, uint32_t option);
++/* Per-game launch entries, "APPID:KEY[,APPID:KEY...]" (spaces allowed around
++ * ',' and ':'). 1: appid listed, *option set; 0: not listed; -1: malformed,
++ * a duplicate App ID, or more than 64 entries. */
++int sh_find_launch_option(const char *list, uint32_t appid, uint32_t *option);
+ 
+ /* ml1990: Valve custom-executable (CEG) preparation. Callback 1020025 is
+  * posted once per per-file job: int32 EResult, uint32 AppID (8 bytes).
+diff --git a/tests/test-validation.c b/tests/test-validation.c
+index db401e7..eba4018 100644
+--- a/tests/test-validation.c
++++ b/tests/test-validation.c
+@@ -19,6 +19,38 @@ int main(void)
+     assert(!sh_parse_launch_option("-1", &option) && !sh_parse_launch_option("+1", &option));
+     assert(!sh_parse_launch_option(" 1", &option) && !sh_parse_launch_option("1x", &option));
+     assert(!sh_parse_launch_option("1", NULL));
++    option = 99;
++    assert(sh_find_launch_option("", 3527290, &option) == 0 && option == 99);
++    assert(sh_find_launch_option("  ", 3527290, &option) == 0 && option == 99);
++    assert(sh_find_launch_option("3527290:6", 3527290, &option) == 1 && option == 6);
++    assert(sh_find_launch_option("3527290:6,2161700:1", 2161700, &option) == 1 && option == 1);
++    assert(sh_find_launch_option(" 3527290 : 6 , 2161700 : 1 ", 3527290, &option) == 1 && option == 6);
++    option = 99;
++    assert(sh_find_launch_option("3527290:6,2161700:1", 433340, &option) == 0 && option == 99);
++    assert(sh_find_launch_option("433340:0", 433340, &option) == 1 && option == 0);
++    assert(sh_find_launch_option("4294967295:2147483647", 4294967295u, &option) == 1 && option == INT32_MAX);
++    assert(sh_find_launch_option("1:2147483648", 1, &option) == -1);
++    assert(sh_find_launch_option("4294967296:1", 1, &option) == -1);
++    assert(sh_find_launch_option("0:1", 0, &option) == -1);
++    assert(sh_find_launch_option("3527290:06", 3527290, &option) == -1);
++    assert(sh_find_launch_option("3527290:6,3527290:5", 3527290, &option) == -1);
++    assert(sh_find_launch_option("3527290:6,3527290:5", 1, &option) == -1);
++    assert(sh_find_launch_option("3527290:6,", 3527290, &option) == -1);
++    assert(sh_find_launch_option(",3527290:6", 3527290, &option) == -1);
++    assert(sh_find_launch_option("3527290=6", 3527290, &option) == -1);
++    assert(sh_find_launch_option("3527290:-6", 3527290, &option) == -1);
++    assert(sh_find_launch_option("3527290:6;1:2", 3527290, &option) == -1);
++    assert(sh_find_launch_option("3527290", 3527290, &option) == -1);
++    assert(sh_find_launch_option(NULL, 1, &option) == -1 && sh_find_launch_option("1:1", 1, NULL) == -1);
++    {
++        char list[1024] = {0};
++        size_t used = 0;
++        for (unsigned i = 1; i <= 65; ++i)
++            used += (size_t)snprintf(list + used, sizeof(list) - used, "%s%u:%u", i > 1 ? "," : "", i, i);
++        assert(sh_find_launch_option(list, 1, &option) == -1);
++        list[strlen(list) - strlen(",65:65")] = 0;
++        assert(sh_find_launch_option(list, 64, &option) == 1 && option == 64);
++    }
+     unsigned char missing[524] = {0};
+     const char missing_text[] = "entry for launch option 7 not found";
+     memcpy(missing + 12, missing_text, sizeof(missing_text));
+-- 
+2.53.0.windows.1
+

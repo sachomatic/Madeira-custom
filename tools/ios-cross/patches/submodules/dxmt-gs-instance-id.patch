@@ -1,0 +1,14 @@
+diff --git a/src/airconv/dxbc_signature.cpp b/src/airconv/dxbc_signature.cpp
+index b7e111e..f82dddd 100644
+--- a/src/airconv/dxbc_signature.cpp
++++ b/src/airconv/dxbc_signature.cpp
+@@ -1064,6 +1064,9 @@ handle_signature_gs(
+     }
+     case microsoft::D3D10_SB_OPERAND_TYPE_INPUT_PRIMITIVEID:
+       break;
++    case microsoft::D3D11_SB_OPERAND_TYPE_INPUT_GS_INSTANCE_ID:
++      // vGSInstanceID: read from the mesh grid position (dxbc_converter_gs.cpp)
++      break;
+     default:
+       assert(0 && "unhandled geometry shader input");
+       break;

@@ -1,0 +1,2855 @@
+diff --git a/README.md b/README.md
+index 3026f0269a..0158715624 100644
+--- a/README.md
++++ b/README.md
+@@ -35,6 +35,9 @@ Wine's server runs as a thread instead of a separate program.
+ - **Game library** with artwork, search and a Windows desktop session.
+ - **Steam**: sign in, browse the games you own, install and update them, and
+   start them through Valve's own Windows Steam client (Madeira Dock).
++- **Epic Games**: sign in, browse the games you own, and install and start
++  them directly, without Epic's launcher. The installer is a Swift port of
++  [Legendary](https://github.com/derrod/legendary).
+ - **Steam Cloud saves**: saves sync with Steam Cloud when Madeira starts and
+   before a game starts, and **Upload saves and close Madeira** in the game
+   menu sends them when you stop playing. Saves that
+@@ -106,6 +109,7 @@ and some inputs that are not in the repository, such as the toolchains.
+ | StikDebug and built-in JIT setup | [`docs/JIT.md`](docs/JIT.md) |
+ | The game library | [`docs/LIBRARY.md`](docs/LIBRARY.md) |
+ | Steam sign-in, library and downloads | [`docs/STEAM_SIGNIN.md`](docs/STEAM_SIGNIN.md), [`docs/STEAM_LIBRARY.md`](docs/STEAM_LIBRARY.md) |
++| Epic Games sign-in, library and installs | [`docs/EPIC.md`](docs/EPIC.md) |
+ | Steam Cloud saves | [`docs/STEAM_CLOUD.md`](docs/STEAM_CLOUD.md) |
+ | Madeira Dock (the Steam client) | [`docs/MADEIRA_DOCK.md`](docs/MADEIRA_DOCK.md) |
+ | 32-bit games (WoW64) | [`docs/WOW64.md`](docs/WOW64.md) |
+diff --git a/app/Madeira.xcodeproj/project.pbxproj b/app/Madeira.xcodeproj/project.pbxproj
+index 678ed14375..df5f0dc738 100644
+--- a/app/Madeira.xcodeproj/project.pbxproj
++++ b/app/Madeira.xcodeproj/project.pbxproj
+@@ -24,6 +24,13 @@
+ 		A1000710 /* SavesAndShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000710 /* SavesAndShortcuts.swift */; };
+ 		A1000711 /* WineMono.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000711 /* WineMono.swift */; };
+ 		A1000602 /* SteamDownloadBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000602 /* SteamDownloadBackground.swift */; };
++		B1000780 /* EpicAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000780 /* EpicAPI.swift */; };
++		B1000781 /* EpicAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000781 /* EpicAuth.swift */; };
++		B1000782 /* EpicSignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000782 /* EpicSignInView.swift */; };
++		B1000783 /* EpicLibraryViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000783 /* EpicLibraryViews.swift */; };
++		B1000784 /* EpicManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000784 /* EpicManifest.swift */; };
++		B1000785 /* EpicChunk.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000785 /* EpicChunk.swift */; };
++		B1000786 /* EpicInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000786 /* EpicInstaller.swift */; };
+ 		A1000600 /* SteamInstall.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000600 /* SteamInstall.swift */; };
+ 		A1000609 /* SwiftSteam/Content/ContentDecryptor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000609 /* ContentDecryptor.swift */; };
+ 		A100060A /* SwiftSteam/Content/DepotDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200060A /* DepotDownloader.swift */; };
+@@ -190,6 +197,13 @@
+ 		A2000710 /* SavesAndShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SavesAndShortcuts.swift"; sourceTree = "<group>"; };
+ 		A2000711 /* WineMono.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WineMono.swift"; sourceTree = "<group>"; };
+ 		A2000602 /* SteamDownloadBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SteamDownloadBackground.swift"; sourceTree = "<group>"; };
++		B2000780 /* EpicAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicAPI.swift; sourceTree = "<group>"; };
++		B2000781 /* EpicAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicAuth.swift; sourceTree = "<group>"; };
++		B2000782 /* EpicSignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicSignInView.swift; sourceTree = "<group>"; };
++		B2000783 /* EpicLibraryViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicLibraryViews.swift; sourceTree = "<group>"; };
++		B2000784 /* EpicManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicManifest.swift; sourceTree = "<group>"; };
++		B2000785 /* EpicChunk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicChunk.swift; sourceTree = "<group>"; };
++		B2000786 /* EpicInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicInstaller.swift; sourceTree = "<group>"; };
+ 		A2000600 /* SteamInstall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SteamInstall.swift"; sourceTree = "<group>"; };
+ 		A2000609 /* ContentDecryptor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SwiftSteam/Content/ContentDecryptor.swift"; sourceTree = "<group>"; };
+ 		A200060A /* DepotDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SwiftSteam/Content/DepotDownloader.swift"; sourceTree = "<group>"; };
+@@ -403,6 +417,13 @@
+ 				A2000710 /* SavesAndShortcuts.swift */,
+ 				A2000711 /* WineMono.swift */,
+ 				A2000602 /* SteamDownloadBackground.swift */,
++				B2000780 /* EpicAPI.swift */,
++				B2000781 /* EpicAuth.swift */,
++				B2000782 /* EpicSignInView.swift */,
++				B2000783 /* EpicLibraryViews.swift */,
++				B2000784 /* EpicManifest.swift */,
++				B2000785 /* EpicChunk.swift */,
++				B2000786 /* EpicInstaller.swift */,
+ 				A2000600 /* SteamInstall.swift */,
+ 				A2000609 /* ContentDecryptor.swift */,
+ 				A200060A /* DepotDownloader.swift */,
+@@ -729,6 +750,13 @@
+ 				A1000710 /* SavesAndShortcuts.swift in Sources */,
+ 				A1000711 /* WineMono.swift in Sources */,
+ 				A1000602 /* SteamDownloadBackground.swift in Sources */,
++				B1000780 /* EpicAPI.swift in Sources */,
++				B1000781 /* EpicAuth.swift in Sources */,
++				B1000782 /* EpicSignInView.swift in Sources */,
++				B1000783 /* EpicLibraryViews.swift in Sources */,
++				B1000784 /* EpicManifest.swift in Sources */,
++				B1000785 /* EpicChunk.swift in Sources */,
++				B1000786 /* EpicInstaller.swift in Sources */,
+ 				A1000600 /* SteamInstall.swift in Sources */,
+ 				A1000609 /* SwiftSteam/Content/ContentDecryptor.swift in Sources */,
+ 				A100060A /* SwiftSteam/Content/DepotDownloader.swift in Sources */,
+diff --git a/app/Madeira/ContentView.swift b/app/Madeira/ContentView.swift
+index 36c6c88d19..1042f295cf 100644
+--- a/app/Madeira/ContentView.swift
++++ b/app/Madeira/ContentView.swift
+@@ -2148,6 +2148,7 @@ struct ContentView: View {
+         .sheet(item: $devSheet) { sheet in
+             switch sheet {
+             case .steamSignIn: SteamSignInView()
++            case .epicSignIn: EpicSignInView()
+             case .dock: MadeiraDockView { startDock($0, compactPool: $1) }
+             case .allSettings: AllSettingsView()
+             }
+@@ -2538,7 +2539,25 @@ struct ContentView: View {
+     }
+ 
+     /// The rest of Play, with JIT on: checks the entry's launch profile and starts it.
+-    private func startLibraryEntry(_ entry: LibraryEntry) {
++    private func startLibraryEntry(_ entry: LibraryEntry, epicArguments: String? = nil) {
++        if let appName = entry.epicAppName, epicArguments == nil {
++            // Fetch after JIT setup so the short-lived exchange code is fresh when Wine starts.
++            Task {
++                do {
++                    let arguments = try await EpicAuth.shared.gameArguments(appName: appName)
++                    guard library.current == nil, wine_process_is_running() == 0, wineserver_is_running() == 0 else { return }
++                    startLibraryEntry(entry, epicArguments: arguments)
++                } catch { library.error = (error as? EpicAuthError)?.message ?? error.localizedDescription }
++            }
++            return
++        }
++        // The library keeps the entry without this run's exchange code.
++        let savedEntry = entry
++        var entry = entry
++        if let epicArguments, let appName = entry.epicAppName {
++            let command = entry.epicLaunchCommand ?? EpicInstaller.shared.installed[appName]?.launchCommand ?? ""
++            entry.arguments = [command, entry.arguments, epicArguments].filter { !$0.isEmpty }.joined(separator: " ")
++        }
+         do { if entry.desktop != true { _ = try LibraryModel.executable(entry.launchRelativePath) }; try entry.validate() }
+         catch {
+             library.error = error.localizedDescription
+@@ -2556,7 +2575,7 @@ struct ContentView: View {
+         let program = entry.desktop == true ? "explorer.exe"
+             : entry.launchWindowsPath.split(separator: "\\").last.map(String.init) ?? entry.launchWindowsPath
+         LogStore.shared.startSessionLog(program: program)
+-        library.begin(entry)
++        library.begin(savedEntry)
+         runWineFullSequence(profile: entry)
+     }
+ 
+diff --git a/app/Madeira/Epic/EpicAPI.swift b/app/Madeira/Epic/EpicAPI.swift
+new file mode 100644
+index 0000000000..1ae32a03a4
+--- /dev/null
++++ b/app/Madeira/Epic/EpicAPI.swift
+@@ -0,0 +1,273 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright 2026 125hz
++// Madeira Converter Exception: see LICENSE-EXCEPTION.md
++//
++// Epic Games library: the owned-games list via the library-service API —
++// the same endpoint Legendary's get_library_items uses — with cursor
++// pagination. DLC and the Unreal Engine itself are filtered out.
++
++import Foundation
++import Combine
++
++struct EpicGame: Identifiable, Codable {
++    var appName: String
++    var title: String
++    var namespace: String
++    var catalogItemId: String?
++    var artworkURL: URL?
++    /// Wide art for the library's hero and the game's page (optional: older caches lack it).
++    var heroURL: URL?
++
++    var id: String { appName }
++}
++
++private struct EpicLibraryResponse: Codable {
++    var records: [EpicLibraryRecord]?
++    var responseMetadata: EpicResponseMetadata?
++}
++
++private struct EpicResponseMetadata: Codable {
++    var nextCursor: String?
++}
++
++private struct EpicLibraryRecord: Codable {
++    var appName: String?
++    var title: String?
++    var namespace: String?
++    var catalogItemId: String?
++    var metadata: EpicRecordMetadata?
++}
++
++/// A catalog item: the title and art the library records usually lack.
++private struct EpicCatalogItem: Codable {
++    var title: String?
++    var keyImages: [EpicKeyImage]?
++    var mainGameItem: EpicMainGameItem?
++    var categories: [EpicCategory]?
++}
++
++private struct EpicCategory: Codable {
++    var path: String?
++}
++
++private struct EpicRecordMetadata: Codable {
++    var keyImages: [EpicKeyImage]?
++    var mainGameItem: EpicMainGameItem?
++}
++
++private struct EpicKeyImage: Codable {
++    var type: String?
++    var url: String?
++}
++
++private struct EpicMainGameItem: Codable {
++    var id: String?
++}
++
++final class EpicLibrary: ObservableObject {
++    static let shared = EpicLibrary()
++
++    @Published private(set) var games: [EpicGame] = []
++    @Published private(set) var isLoading = false
++    @Published var error: String?
++
++    private let host = "library-service.live.use1a.on.epicgames.com"
++    private let userAgent = "UELauncher/11.0.1-14907503+++Portal+Release-Live Windows/10.0.19041.1.256.64bit"
++    /// Preferred artwork, tallest box art first.
++    private let artworkPreference = ["DieselGameBoxTall", "DieselGameBox", "Thumbnail",
++                                     "DieselStoreFrontTall", "DieselStoreFrontWide"]
++
++    /// Wide artwork, store front first.
++    private let heroPreference = ["DieselStoreFrontWide", "OfferImageWide", "DieselGameBox",
++                                  "Thumbnail", "DieselGameBoxTall"]
++
++    /// The last fetched list, kept on disk so the library shows the account's games
++    /// at once, before (or without) the network.
++    private static var cacheURL: URL {
++        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
++            .appendingPathComponent("epic-library.json")
++    }
++
++    private init() {
++        if let data = try? Data(contentsOf: Self.cacheURL),
++           let cached = try? JSONDecoder().decode([EpicGame].self, from: data) {
++            games = cached
++        }
++    }
++
++    private static func store(_ games: [EpicGame]) {
++        guard let data = try? JSONEncoder().encode(games) else { return }
++        try? FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
++        try? data.write(to: cacheURL, options: .atomic)
++    }
++
++    private var lastRefresh: Date?
++
++    /// The library's quiet refresh: when signed in, at most every 10 minutes.
++    func refreshIfStale() {
++        guard EpicAuth.shared.signedIn else { return }
++        if let last = lastRefresh, Date().timeIntervalSince(last) < 600 { return }
++        refresh()
++    }
++
++    func clear() {
++        games = []
++        error = nil
++        lastRefresh = nil
++        try? FileManager.default.removeItem(at: Self.cacheURL)
++    }
++
++    func refresh() {
++        guard !isLoading else { return }
++        isLoading = true
++        lastRefresh = Date()
++        error = nil
++        Task {
++            do {
++                let token = try await EpicAuth.shared.validAccessToken()
++                let games = try await fetchAll(token: token)
++                Self.store(games)
++                await MainActor.run {
++                    self.games = games
++                    self.isLoading = false
++                }
++            } catch {
++                LogStore.shared.log("[epic-library] refresh failed: \(error)", level: .error)
++                await MainActor.run {
++                    self.error = (error as? EpicAuthError)?.message ?? error.localizedDescription
++                    self.isLoading = false
++                }
++            }
++        }
++    }
++
++    private func fetchAll(token: String) async throws -> [EpicGame] {
++        var records: [EpicLibraryRecord] = []
++        var cursor: String? = nil
++        repeat {
++            let (page, next) = try await fetchPage(token: token, cursor: cursor)
++            records.append(contentsOf: page)
++            cursor = next
++        } while cursor != nil
++
++        // The library service mostly returns ids only (appName, namespace,
++        // catalogItemId): the title, art and DLC flag live in Epic's catalog, which
++        // is what Legendary's get_game_info reads. Look up every record missing them.
++        var wanted: [String: Set<String>] = [:]
++        for record in records where (record.title ?? "").isEmpty || record.metadata?.keyImages == nil {
++            if let ns = record.namespace, let id = record.catalogItemId, ns != "ue" { wanted[ns, default: []].insert(id) }
++        }
++        let catalog = await fetchCatalog(token: token, wanted: wanted)
++        // Mobile-store copies (Epic Games Store on iOS/Android) are library records too,
++        // with no Windows build. Like Legendary, keep only games in the Windows asset
++        // list; if that list fails to load, keep everything.
++        let windows = await fetchWindowsAssets(token: token)
++
++        var games: [EpicGame] = []
++        for record in records {
++            guard let appName = record.appName, !appName.isEmpty, record.namespace != "ue" else { continue }
++            if let windows, !windows.contains("\(record.namespace ?? "")/\(record.catalogItemId ?? "")") { continue }
++            let item = record.catalogItemId.flatMap { catalog[$0] }
++            let title = (record.title?.isEmpty == false ? record.title : item?.title) ?? ""
++            guard !title.isEmpty else { continue }
++            // DLC rides on a main game item, and add-ons are filed under addons.
++            if record.metadata?.mainGameItem != nil || item?.mainGameItem != nil { continue }
++            if item?.categories?.contains(where: { ($0.path ?? "").hasPrefix("addons") }) == true { continue }
++            let images = record.metadata?.keyImages ?? item?.keyImages
++            games.append(EpicGame(
++                appName: appName,
++                title: title,
++                namespace: record.namespace ?? "",
++                catalogItemId: record.catalogItemId,
++                artworkURL: Self.artwork(from: images, preferring: artworkPreference),
++                heroURL: Self.artwork(from: images, preferring: heroPreference)
++            ))
++        }
++        LogStore.shared.log("[epic-library] records=\(records.count) windows-assets=\(windows.map { String($0.count) } ?? "unavailable") catalog-lookups=\(wanted.values.reduce(0) { $0 + $1.count }) found=\(catalog.count) games=\(games.count)")
++        // The library lists a game once per entitlement; keep one per title.
++        return games.reduce(into: [EpicGame]()) { kept, game in
++            if !kept.contains(where: { $0.title == game.title }) { kept.append(game) }
++        }
++        .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
++    }
++
++    /// Catalog items by id, eight namespaces at a time. A namespace that fails is
++    /// skipped: its games just stay out until the next refresh.
++    private func fetchCatalog(token: String, wanted: [String: Set<String>]) async -> [String: EpicCatalogItem] {
++        var result: [String: EpicCatalogItem] = [:]
++        let namespaces = Array(wanted.keys)
++        var index = 0
++        while index < namespaces.count {
++            let batch = namespaces[index..<min(index + 8, namespaces.count)]
++            index += 8
++            await withTaskGroup(of: [String: EpicCatalogItem].self) { group in
++                for ns in batch {
++                    let ids = Array(wanted[ns] ?? [])
++                    group.addTask { (try? await self.fetchCatalogItems(token: token, namespace: ns, ids: ids)) ?? [:] }
++                }
++                for await items in group { result.merge(items) { a, _ in a } }
++            }
++        }
++        return result
++    }
++
++    private func fetchCatalogItems(token: String, namespace: String, ids: [String]) async throws -> [String: EpicCatalogItem] {
++        var components = URLComponents(string: "https://catalog-public-service-prod06.ol.epicgames.com/catalog/api/shared/namespace/\(namespace)/bulk/items")!
++        components.queryItems = [URLQueryItem(name: "id", value: ids.joined(separator: ",")),
++                                 URLQueryItem(name: "includeDLCDetails", value: "true"),
++                                 URLQueryItem(name: "includeMainGameDetails", value: "true"),
++                                 URLQueryItem(name: "country", value: "US"),
++                                 URLQueryItem(name: "locale", value: "en-US")]
++        var request = URLRequest(url: components.url!)
++        request.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
++        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
++        let (data, response) = try await URLSession.shared.data(for: request)
++        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw EpicAuthError.network }
++        return try JSONDecoder().decode([String: EpicCatalogItem].self, from: data)
++    }
++
++    private static func artwork(from images: [EpicKeyImage]?, preferring order: [String]) -> URL? {
++        guard let images = images else { return nil }
++        for type in order {
++            if let urlString = images.first(where: { $0.type == type })?.url,
++               !urlString.isEmpty, let url = URL(string: urlString) {
++                return url
++            }
++        }
++        return nil
++    }
++
++    /// "namespace/catalogItemId" for every game the account can install on Windows.
++    private func fetchWindowsAssets(token: String) async -> Set<String>? {
++        var components = URLComponents(string: "https://launcher-public-service-prod06.ol.epicgames.com/launcher/api/public/assets/Windows")!
++        components.queryItems = [URLQueryItem(name: "label", value: "Live")]
++        var request = URLRequest(url: components.url!)
++        request.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
++        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
++        guard let (data, response) = try? await URLSession.shared.data(for: request),
++              (response as? HTTPURLResponse)?.statusCode == 200,
++              let assets = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
++        else { return nil }
++        let keys = Set(assets.compactMap { asset -> String? in
++            guard let ns = asset["namespace"] as? String, let id = asset["catalogItemId"] as? String else { return nil }
++            return "\(ns)/\(id)"
++        })
++        return keys.isEmpty ? nil : keys
++    }
++
++    private func fetchPage(token: String, cursor: String?) async throws -> ([EpicLibraryRecord], String?) {
++        var components = URLComponents(string: "https://\(host)/library/api/public/items")!
++        var items = [URLQueryItem(name: "includeMetadata", value: "true")]
++        if let cursor = cursor {
++            items.append(URLQueryItem(name: "cursor", value: cursor))
++        }
++        components.queryItems = items
++        var request = URLRequest(url: components.url!)
++        request.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
++        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
++        let (data, response) = try await URLSession.shared.data(for: request)
++        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw EpicAuthError.network }
++        let decoded = try JSONDecoder().decode(EpicLibraryResponse.self, from: data)
++        return (decoded.records ?? [], decoded.responseMetadata?.nextCursor)
++    }
++}
+diff --git a/app/Madeira/Epic/EpicAuth.swift b/app/Madeira/Epic/EpicAuth.swift
+new file mode 100644
+index 0000000000..c45c5dde88
+--- /dev/null
++++ b/app/Madeira/Epic/EpicAuth.swift
+@@ -0,0 +1,294 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright 2026 125hz
++// Madeira Converter Exception: see LICENSE-EXCEPTION.md
++//
++// Epic Games sign-in, modeled on Legendary's auth flow
++// (https://github.com/derrod/legendary). The user logs in on Epic's site in
++// an embedded web view; Madeira reads the authorizationCode from Epic's
++// redirect page and exchanges it for OAuth tokens. The password is entered
++// on Epic's site and never touches the app; tokens live in the Keychain.
++
++import Foundation
++import Security
++import SwiftUI
++import WebKit
++import Combine
++
++enum EpicAuthError: Error {
++    case notSignedIn
++    case network
++    case rejected(String)
++    case correctiveAction(String?)
++
++    var message: String {
++        switch self {
++        case .notSignedIn: return "Sign in to Epic Games first."
++        case .network: return "Could not reach Epic Games. Check your connection and try again."
++        case .rejected(let code): return "Epic Games refused the sign-in (\(code)). Try again."
++        case .correctiveAction(let detail):
++            return "Epic Games needs an extra step: \(detail ?? "open Epic's site and follow the prompt")."
++        }
++    }
++}
++
++/// Epic Games authentication: OAuth login through Epic's site, token
++/// exchange and refresh, Keychain storage. Mirrors Legendary's auth_code flow.
++final class EpicAuth: ObservableObject {
++    static let shared = EpicAuth()
++
++    @Published private(set) var accountName: String?
++    @Published var signInError: String?
++    @Published private(set) var isBusy = false
++
++    /// Epic's public launcher client credentials (the same ones Legendary uses).
++    private let clientID = "34a02cf8f4414e29b15921876da36f9a"
++    private let clientSecret = "daafbccc737745039dffe53d94fc76cf"
++    private let oauthHost = "account-public-service-prod03.ol.epicgames.com"
++    private let userAgent = "UELauncher/11.0.1-14907503+++Portal+Release-Live Windows/10.0.19041.1.256.64bit"
++
++    private let store = EpicTokenStore()
++
++    var signedIn: Bool { accountName != nil }
++
++    /// The saved login is read at start, so the library shows the account's games
++    /// without visiting Settings first.
++    private init() {
++        accountName = store.loadTokens()?.displayName
++    }
++
++    /// Epic's login page. After login, Epic shows a JSON page containing the
++    /// authorizationCode, which the embedded web view captures.
++    var loginURL: URL {
++        var components = URLComponents(string: "https://www.epicgames.com/id/login")!
++        let redirect = "https://www.epicgames.com/id/api/redirect?clientId=\(clientID)&responseType=code"
++        components.queryItems = [URLQueryItem(name: "redirectUrl", value: redirect)]
++        return components.url!
++    }
++
++    func refresh() {
++        accountName = store.loadTokens()?.displayName
++        signInError = nil
++    }
++
++    /// Pull an authorizationCode out of pasted text: either the raw code or
++    /// the whole JSON blob from Epic's redirect page (like Legendary's CLI).
++    static func extractCode(from text: String) -> String {
++        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
++        if trimmed.hasPrefix("{"),
++           let data = trimmed.data(using: .utf8),
++           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
++           let code = json["authorizationCode"] as? String, !code.isEmpty {
++            return code
++        }
++        return trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
++    }
++
++    /// Exchange an authorizationCode for tokens.
++    func exchange(authorizationCode code: String) {
++        guard !isBusy else { return }
++        isBusy = true
++        signInError = nil
++        Task {
++            do {
++                let tokens = try await requestTokens(grant: [
++                    ("grant_type", "authorization_code"),
++                    ("code", code),
++                    ("token_type", "eg1"),
++                ])
++                store.save(tokens: tokens)
++                await MainActor.run {
++                    self.accountName = tokens.displayName
++                    self.isBusy = false
++                }
++            } catch {
++                await MainActor.run {
++                    self.signInError = (error as? EpicAuthError)?.message ?? error.localizedDescription
++                    self.isBusy = false
++                }
++            }
++        }
++    }
++
++    /// A valid access token, refreshing first when expired.
++    func validAccessToken() async throws -> String {
++        guard var tokens = store.loadTokens() else { throw EpicAuthError.notSignedIn }
++        if tokens.expiresAt > Date().addingTimeInterval(60) {
++            return tokens.accessToken
++        }
++        tokens = try await requestTokens(grant: [
++            ("grant_type", "refresh_token"),
++            ("refresh_token", tokens.refreshToken),
++            ("token_type", "eg1"),
++        ])
++        store.save(tokens: tokens)
++        await MainActor.run { self.accountName = tokens.displayName }
++        return tokens.accessToken
++    }
++
++    /// Legendary's get_game_token: exchange codes are fetched for one launch and never saved.
++    func gameArguments(appName: String) async throws -> String {
++        let token = try await validAccessToken()
++        guard let account = store.loadTokens() else { throw EpicAuthError.notSignedIn }
++        var request = URLRequest(url: URL(string: "https://\(oauthHost)/account/api/oauth/exchange")!)
++        request.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
++        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
++        let (data, response) = try await URLSession.shared.data(for: request)
++        guard (response as? HTTPURLResponse)?.statusCode == 200,
++              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
++              let code = json["code"] as? String, !code.isEmpty else { throw EpicAuthError.network }
++        let arguments = ["-AUTH_LOGIN=unused", "-AUTH_PASSWORD=" + code, "-AUTH_TYPE=exchangecode",
++                         "-epicapp=" + appName, "-epicenv=Prod", "-EpicPortal",
++                         "-epicusername=" + account.displayName, "-epicuserid=" + account.accountID, "-epiclocale=en"]
++        // Madeira's tokenizer groups double-quoted values; embedded quotes/control characters
++        // cannot be represented and must not turn an account name into another argument.
++        guard arguments.allSatisfy({ !$0.contains("\"") && !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) }) else {
++            throw EpicContentError.invalid("Epic returned invalid launch parameters.")
++        }
++        return arguments.map { "\"" + $0 + "\"" }.joined(separator: " ")
++    }
++
++    func signOut() {
++        store.delete()
++        accountName = nil
++        signInError = nil
++    }
++
++    // MARK: - Token endpoint
++
++    private func requestTokens(grant: [(String, String)]) async throws -> EpicTokens {
++        var request = URLRequest(url: URL(string: "https://\(oauthHost)/account/api/oauth/token")!)
++        request.httpMethod = "POST"
++        let credentials = "\(clientID):\(clientSecret)".data(using: .utf8)!.base64EncodedString()
++        request.setValue("Basic \(credentials)", forHTTPHeaderField: "Authorization")
++        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
++        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
++        var body = URLComponents()
++        body.queryItems = grant.map { URLQueryItem(name: $0.0, value: $0.1) }
++        request.httpBody = body.percentEncodedQuery?.data(using: .utf8)
++
++        let (data, response) = try await URLSession.shared.data(for: request)
++        guard let http = response as? HTTPURLResponse,
++              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
++            throw EpicAuthError.network
++        }
++        if let code = json["errorCode"] as? String {
++            if code == "errors.com.epicgames.oauth.corrective_action_required" {
++                throw EpicAuthError.correctiveAction(json["errorMessage"] as? String)
++            }
++            throw EpicAuthError.rejected(code)
++        }
++        guard http.statusCode < 400,
++              let access = json["access_token"] as? String,
++              let refresh = json["refresh_token"] as? String else {
++            throw EpicAuthError.rejected("unknown")
++        }
++        let expiresIn: Double
++        if let d = json["expires_in"] as? Double { expiresIn = d }
++        else if let i = json["expires_in"] as? Int { expiresIn = Double(i) }
++        else { expiresIn = 7200 }
++        return EpicTokens(
++            accessToken: access,
++            refreshToken: refresh,
++            expiresAt: Date().addingTimeInterval(expiresIn - 60),
++            accountID: json["account_id"] as? String ?? "",
++            displayName: json["displayName"] as? String ?? "",
++            savedAt: Date()
++        )
++    }
++}
++
++/// The OAuth tokens, kept in the Keychain like Steam's tokens.
++struct EpicTokens: Codable {
++    var accessToken: String
++    var refreshToken: String
++    var expiresAt: Date
++    var accountID: String
++    var displayName: String
++    var savedAt: Date
++}
++
++final class EpicTokenStore {
++    private let serviceName = "madeira.epic.tokens"
++
++    func save(tokens: EpicTokens) {
++        guard let data = try? JSONEncoder().encode(tokens) else { return }
++        delete()
++        let query: [String: Any] = [
++            kSecClass as String: kSecClassGenericPassword,
++            kSecAttrService as String: serviceName,
++            kSecAttrAccount as String: "epic_tokens",
++            kSecValueData as String: data,
++            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
++        ]
++        SecItemAdd(query as CFDictionary, nil)
++    }
++
++    func loadTokens() -> EpicTokens? {
++        let query: [String: Any] = [
++            kSecClass as String: kSecClassGenericPassword,
++            kSecAttrService as String: serviceName,
++            kSecAttrAccount as String: "epic_tokens",
++            kSecReturnData as String: true,
++            kSecMatchLimit as String: kSecMatchLimitOne,
++        ]
++        var result: AnyObject?
++        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
++              let data = result as? Data,
++              let tokens = try? JSONDecoder().decode(EpicTokens.self, from: data) else {
++            return nil
++        }
++        return tokens
++    }
++
++    func delete() {
++        let query: [String: Any] = [
++            kSecClass as String: kSecClassGenericPassword,
++            kSecAttrService as String: serviceName,
++            kSecAttrAccount as String: "epic_tokens",
++        ]
++        SecItemDelete(query as CFDictionary)
++    }
++}
++
++/// WKWebView wrapper that watches for Epic's redirect page and pulls the
++/// authorizationCode out of its JSON, so the user never pastes anything.
++struct EpicLoginWebView: UIViewRepresentable {
++    var onCode: (String) -> Void
++
++    func makeUIView(context: Context) -> WKWebView {
++        let web = WKWebView()
++        web.navigationDelegate = context.coordinator
++        web.load(URLRequest(url: EpicAuth.shared.loginURL))
++        return web
++    }
++
++    func updateUIView(_ uiView: WKWebView, context: Context) {}
++
++    func makeCoordinator() -> Coordinator {
++        Coordinator(onCode: onCode)
++    }
++
++    final class Coordinator: NSObject, WKNavigationDelegate {
++        let onCode: (String) -> Void
++        private var didCapture = false
++
++        init(onCode: @escaping (String) -> Void) {
++            self.onCode = onCode
++        }
++
++        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
++            guard !didCapture,
++                  let url = webView.url?.absoluteString,
++                  url.contains("id/api/redirect") else { return }
++            webView.evaluateJavaScript("document.body.innerText") { [weak self] result, _ in
++                guard let self = self, !self.didCapture,
++                      let text = result as? String,
++                      text.contains("authorizationCode") else { return }
++                let code = EpicAuth.extractCode(from: text)
++                guard !code.isEmpty else { return }
++                self.didCapture = true
++                self.onCode(code)
++            }
++        }
++    }
++}
+diff --git a/app/Madeira/Epic/EpicChunk.swift b/app/Madeira/Epic/EpicChunk.swift
+new file mode 100644
+index 0000000000..ed0cdb01aa
+--- /dev/null
++++ b/app/Madeira/Epic/EpicChunk.swift
+@@ -0,0 +1,169 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Madeira Converter Exception: see LICENSE-EXCEPTION.md
++// Ported from Legendary's models/chunk.py (GPL-3.0-or-later).
++
++import Foundation
++import zlib
++
++enum EpicContentError: LocalizedError {
++    case invalid(String)
++    case httpStatus(Int)
++    var errorDescription: String? {
++        switch self {
++        case .invalid(let message): return message
++        case .httpStatus(let status): return "Epic download failed (HTTP \(status)). Try again."
++        }
++    }
++}
++
++struct EpicReader {
++    let data: Data
++    var position = 0
++
++    mutating func bytes(_ count: Int) throws -> Data {
++        guard count >= 0, position <= data.count, count <= data.count - position else {
++            throw EpicContentError.invalid("Truncated Epic content.")
++        }
++        defer { position += count }
++        return data.subdata(in: position..<position + count)
++    }
++    mutating func number(_ count: Int) throws -> UInt64 {
++        try bytes(count).enumerated().reduce(0) { $0 | UInt64($1.element) << ($1.offset * 8) }
++    }
++    mutating func u32() throws -> Int { Int(try number(4)) }
++    mutating func guid() throws -> String {
++        try (0..<4).map { _ in String(format: "%08X", try number(4)) }.joined()
++    }
++    mutating func string() throws -> String {
++        let length = Int(Int32(bitPattern: UInt32(try number(4))))
++        if length == 0 { return "" }
++        let wide = length < 0
++        let raw = try bytes(abs(length) * (wide ? 2 : 1))
++        let terminator = wide ? 2 : 1
++        guard raw.suffix(terminator).allSatisfy({ $0 == 0 }),
++              let result = String(data: raw.dropLast(terminator), encoding: wide ? .utf16LittleEndian : .ascii) else {
++            throw EpicContentError.invalid("Invalid Epic string.")
++        }
++        return result
++    }
++    mutating func strings() throws -> [String] {
++        let count = try boundedCount()
++        return try (0..<count).map { _ in try string() }
++    }
++    mutating func boundedCount() throws -> Int {
++        let count = try u32()
++        guard count <= data.count - position else { throw EpicContentError.invalid("Invalid Epic list length.") }
++        return count
++    }
++    mutating func section() throws -> EpicReader {
++        let size = try u32()
++        guard size >= 5 else { throw EpicContentError.invalid("Invalid Epic section size.") }
++        return EpicReader(data: try bytes(size - 4))
++    }
++}
++
++/// Incremental SHA-1 keeps file verification independent of file size.
++struct EpicSHA1 {
++    private var state: [UInt32] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0]
++    private var tail = [UInt8]()
++    private var length: UInt64 = 0
++
++    mutating func update(_ data: Data) {
++        length += UInt64(data.count)
++        for byte in data {
++            tail.append(byte)
++            if tail.count == 64 { compress(tail); tail.removeAll(keepingCapacity: true) }
++        }
++    }
++    private func rotate(_ x: UInt32, _ n: UInt32) -> UInt32 { (x << n) | (x >> (32 - n)) }
++    private mutating func compress(_ block: [UInt8]) {
++        var words = [UInt32](repeating: 0, count: 80)
++        for i in 0..<16 {
++            let p = i * 4
++            words[i] = UInt32(block[p]) << 24 | UInt32(block[p + 1]) << 16 | UInt32(block[p + 2]) << 8 | UInt32(block[p + 3])
++        }
++        for i in 16..<80 { words[i] = rotate(words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16], 1) }
++        var a = state[0], b = state[1], c = state[2], d = state[3], e = state[4]
++        for i in 0..<80 {
++            let f: UInt32, k: UInt32
++            switch i {
++            case 0..<20: f = (b & c) | (~b & d); k = 0x5A827999
++            case 20..<40: f = b ^ c ^ d; k = 0x6ED9EBA1
++            case 40..<60: f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC
++            default: f = b ^ c ^ d; k = 0xCA62C1D6
++            }
++            let t = rotate(a, 5) &+ f &+ e &+ k &+ words[i]
++            e = d; d = c; c = rotate(b, 30); b = a; a = t
++        }
++        state[0] &+= a; state[1] &+= b; state[2] &+= c; state[3] &+= d; state[4] &+= e
++    }
++    mutating func finish() -> Data {
++        let bits = length * 8
++        tail.append(0x80)
++        while tail.count % 64 != 56 { tail.append(0) }
++        for shift in stride(from: 56, through: 0, by: -8) { tail.append(UInt8(truncatingIfNeeded: bits >> shift)) }
++        for start in stride(from: 0, to: tail.count, by: 64) { compress(Array(tail[start..<start + 64])) }
++        return Data(state.flatMap { word in [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: word >> $0) } })
++    }
++    static func hash(_ data: Data) -> Data { var hash = Self(); hash.update(data); return hash.finish() }
++    static func file(_ url: URL) throws -> Data {
++        let file = try FileHandle(forReadingFrom: url)
++        defer { try? file.close() }
++        var hash = Self()
++        while let data = try file.read(upToCount: 256 * 1024), !data.isEmpty {
++            try Task.checkCancellation()
++            hash.update(data)
++        }
++        return hash.finish()
++    }
++}
++
++enum EpicChunk {
++    static let maximumSize = 16 * 1024 * 1024
++
++    static func inflate(_ input: Data, size: Int, limit: Int) throws -> Data {
++        guard size > 0, size <= limit else { throw EpicContentError.invalid("Epic content exceeds the decompression limit.") }
++        var output = Data(count: size)
++        var length = uLongf(size)
++        let status = output.withUnsafeMutableBytes { dst in
++            input.withUnsafeBytes { src in
++                uncompress(dst.bindMemory(to: Bytef.self).baseAddress, &length,
++                           src.bindMemory(to: Bytef.self).baseAddress, uLong(input.count))
++            }
++        }
++        guard status == Z_OK, length == size else { throw EpicContentError.invalid("Invalid Epic zlib stream.") }
++        return output
++    }
++
++    static func parse(_ data: Data, expected: EpicManifest.Chunk? = nil) throws -> Data {
++        var r = EpicReader(data: data)
++        guard try r.u32() == 0xB1FE3AA2 else { throw EpicContentError.invalid("Invalid Epic chunk magic.") }
++        let version = try r.u32(), headerSize = try r.u32(), compressedSize = try r.u32()
++        let guid = try r.guid(), hash = try r.number(8), stored = try r.number(1)
++        var sha = Data(), hashType: UInt64 = 0, size = 1024 * 1024
++        guard (1...4).contains(version), stored & ~1 == 0 else {
++            throw EpicContentError.invalid("Encrypted or unsupported Epic chunk.")
++        }
++        if version >= 2 { sha = try r.bytes(20); hashType = try r.number(1) }
++        if version >= 3 { size = try r.u32() }
++        if version >= 4 { _ = try r.bytes(32) }
++        guard r.position == headerSize, compressedSize == data.count - headerSize, size <= maximumSize else {
++            throw EpicContentError.invalid("Invalid Epic chunk size.")
++        }
++        let payload = try r.bytes(compressedSize)
++        let result = stored & 1 != 0 ? try inflate(payload, size: size, limit: maximumSize) : payload
++        let digest = EpicSHA1.hash(result)
++        guard result.count == size, hashType & 2 == 0 || digest == sha else {
++            throw EpicContentError.invalid("Epic chunk SHA-1 mismatch.")
++        }
++        if let expected {
++            guard guid == expected.guid, hash == expected.hash, digest == expected.sha,
++                  result.count == expected.windowSize, data.count == expected.fileSize else {
++                throw EpicContentError.invalid("Epic chunk does not match its manifest.")
++            }
++        } else if hashType & 2 == 0 {
++            throw EpicContentError.invalid("A manifest SHA-1 is required to verify this chunk.")
++        }
++        return result
++    }
++}
+diff --git a/app/Madeira/Epic/EpicInstaller.swift b/app/Madeira/Epic/EpicInstaller.swift
+new file mode 100644
+index 0000000000..9cef6ba9b6
+--- /dev/null
++++ b/app/Madeira/Epic/EpicInstaller.swift
+@@ -0,0 +1,385 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Madeira Converter Exception: see LICENSE-EXCEPTION.md
++// Chunk assembly follows Legendary's downloader/mp/manager.py and workers.py.
++
++import Foundation
++import Combine
++
++struct EpicInstalledGame: Codable {
++    var game: EpicGame
++    var appName: String
++    var installDir: String
++    var buildVersion: String
++    var launchExe: String
++    var launchCommand: String
++    var prereqName: String
++    var prereqPath: String
++    var prereqArgs: String
++}
++
++@MainActor final class EpicInstaller: ObservableObject {
++    static let shared = EpicInstaller()
++    enum State: Equatable { case queued, active, paused, failed(String), installed }
++    struct Install: Equatable {
++        var state: State
++        var progress = SteamDownloadProgress()
++        var download: SteamOwnedLibrary.Download? {
++            let state: SteamOwnedLibrary.Download.State
++            switch self.state {
++            case .queued: state = .queued
++            case .active: state = .active
++            case .paused: state = .paused
++            case .failed(let message): state = .failed(message)
++            case .installed: return nil
++            }
++            return SteamOwnedLibrary.Download(state: state, progress: progress)
++        }
++    }
++    struct Pending: Codable { var game: EpicGame; var installDir: String }
++    struct Store: Codable {
++        var installed: [String: EpicInstalledGame] = [:]
++        var pending: [String: Pending] = [:]
++    }
++    @Published private(set) var installs: [String: Install] = [:]
++    @Published private(set) var installed: [String: EpicInstalledGame] = [:]
++    @Published private(set) var ready = false
++    @Published var error: String?
++    private var pending: [String: Pending] = [:]
++    private var queue: [String] = []
++    private var active: (id: String, task: Task<Void, Never>)?
++    private var removing = Set<String>()
++    private var backgroundPaused = Set<String>()
++    private var saving: Task<Void, Never>?
++    private let worker = EpicInstallWorker(drive: LibraryModel.drive)
++    private lazy var background = SteamDownloadBackground(source: "Epic", suffix: "epic")
++
++    private init() {
++        Task {
++            do {
++                let store = try await worker.load()
++                installed = store.installed; pending = store.pending
++                for (id, record) in installed {
++                    if await worker.exists(record.installDir + "/" + record.launchExe) {
++                        installs[id] = Install(state: .installed)
++                        register(record)
++                    } else { installed.removeValue(forKey: id) }
++                }
++                for id in pending.keys { installs[id] = Install(state: .paused) }
++                attachBackground()
++                ready = true
++            } catch { self.error = "Could not read Epic installs: " + error.localizedDescription }
++        }
++    }
++    private func attachBackground() {
++        background.attach(active: { [weak self] in self?.hasActiveDownload == true },
++                          pause: { [weak self] in self?.pauseForBackground() },
++                          resume: { [weak self] in self?.resumeAfterBackground() })
++    }
++    private var hasActiveDownload: Bool { active != nil || !queue.isEmpty }
++    /// A download queued, running, paused or failed. A finished install stays in
++    /// `installs` with the state .installed, so "has an entry" is not "downloading".
++    func isDownloading(_ appName: String) -> Bool { installs[appName]?.download != nil }
++    func entry(_ appName: String) -> LibraryEntry? {
++        guard installed[appName] != nil else { return nil }
++        return LibraryModel.shared.entries.first { $0.epicAppName == appName }
++    }
++    private func register(_ record: EpicInstalledGame) {
++        var entry = LibraryModel.shared.entries.first { $0.epicAppName == record.appName }
++            ?? LibraryEntry(title: record.game.title, relativePath: "", bits: 0)
++        entry.epicAppName = record.appName
++        entry.epicLaunchCommand = record.launchCommand
++        entry.relativePath = record.installDir + "/" + record.launchExe
++        entry.epicArtworkURL = record.game.artworkURL
++        entry.epicHeroURL = record.game.heroURL
++        LibraryModel.shared.save(entry)
++    }
++    private func persist() {
++        let store = Store(installed: installed, pending: pending), previous = saving
++        saving = Task {
++            await previous?.value
++            do { try await worker.save(store) }
++            catch { self.error = "Could not save Epic installs: " + error.localizedDescription }
++        }
++    }
++    func install(_ game: EpicGame) {
++        guard ready, !removing.contains(game.appName), installed[game.appName] == nil else { return }
++        let id = game.appName
++        if installs[id]?.state == .active || installs[id]?.state == .queued { return }
++        if pending[id] == nil {
++            let safe = SteamInstallFiles.safeFolderName(game.title)
++            // The app name suffix prevents two sanitized titles sharing an uninstall directory.
++            let suffix = EpicSHA1.hash(Data(id.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
++            pending[id] = Pending(game: game, installDir: "Program Files/Epic Games/\(safe.isEmpty ? "Game" : safe)-\(suffix)")
++        } else if game.catalogItemId != nil { pending[id]?.game = game }
++        installs[id] = Install(state: .queued, progress: installs[id]?.progress ?? SteamDownloadProgress())
++        queue.append(id); persist(); startNext()
++    }
++    func pause(_ id: String) {
++        backgroundPaused.remove(id)
++        queue.removeAll { $0 == id }
++        if active?.id == id { active?.task.cancel() }
++        if installed[id] == nil, installs[id] != nil { installs[id]?.state = .paused }
++        persist()
++    }
++    private func pauseForBackground() {
++        let ids = queue + (active.map { [$0.id] } ?? [])
++        for id in ids { pause(id); backgroundPaused.insert(id) }
++    }
++    private func resumeAfterBackground() {
++        let ids = backgroundPaused; backgroundPaused.removeAll()
++        for id in ids { if let game = pending[id]?.game { install(game) } }
++    }
++    func cancel(_ id: String) { remove(id, uninstall: false) }
++    func uninstall(_ id: String) { remove(id, uninstall: true) }
++    private func remove(_ id: String, uninstall: Bool) {
++        guard ready, !removing.contains(id), let dir = pending[id]?.installDir ?? installed[id]?.installDir else { return }
++        if uninstall, LibraryModel.shared.activeEntry?.epicAppName == id {
++            error = "End the game session before uninstalling."; return
++        }
++        removing.insert(id); pause(id)
++        let task = active?.id == id ? active?.task : nil
++        Task {
++            await task?.value
++            do {
++                try await worker.remove(dir)
++                pending.removeValue(forKey: id)
++                if uninstall {
++                    installed.removeValue(forKey: id)
++                    for entry in LibraryModel.shared.entries where entry.epicAppName == id { LibraryModel.shared.remove(entry.id) }
++                }
++                installs.removeValue(forKey: id); persist()
++            } catch { installs[id] = Install(state: .failed("Could not remove Epic files: " + error.localizedDescription)) }
++            removing.remove(id)
++        }
++    }
++    private func startNext() {
++        guard active == nil, !queue.isEmpty else { return }
++        let id = queue.removeFirst()
++        guard let job = pending[id], !removing.contains(id) else { startNext(); return }
++        installs[id]?.state = .active
++        background.downloadStarted(appID: 0, name: job.game.title)
++        let task = Task {
++            var outcome: SteamDownloadBackground.Outcome = .paused
++            do {
++                guard let catalog = job.game.catalogItemId else {
++                    EpicLibrary.shared.refresh()
++                    throw EpicContentError.invalid("Refresh your Epic library, then try installing again.")
++                }
++                let token = try await EpicAuth.shared.validAccessToken()
++                let record = try await worker.run(job, catalog: catalog, token: token) { progress in
++                    await MainActor.run {
++                        guard self.active?.id == id, self.installs[id]?.state == .active else { return }
++                        self.installs[id]?.progress = progress
++                        self.background.progress(progress)
++                    }
++                }
++                try Task.checkCancellation()
++                installed[id] = record; pending.removeValue(forKey: id)
++                register(record); installs[id]?.state = .installed; persist()
++                outcome = .completed
++            } catch {
++                if Task.isCancelled {
++                    if installs[id]?.state != .queued { installs[id]?.state = .paused }
++                } else {
++                    let message = (error as? EpicAuthError)?.message ?? error.localizedDescription
++                    installs[id]?.state = .failed(message)
++                    outcome = .failed(message)
++                    LogStore.shared.log("[epic-install] failure completed-bytes=\(installs[id]?.progress.doneBytes ?? 0) total-bytes=\(installs[id]?.progress.totalBytes ?? 0) reason=\(message)", level: .error)
++                }
++            }
++            active = nil
++            background.downloadEnded(appID: 0, name: job.game.title, outcome: outcome, queueEmpty: queue.isEmpty)
++            startNext()
++        }
++        active = (id, task)
++    }
++}
++
++/// All hashing, decompression and file writes stay off the main actor.
++private actor EpicInstallWorker {
++    private let drive: URL
++    private let storeURL: URL
++
++    init(drive: URL, support: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]) {
++        self.drive = drive; storeURL = support.appendingPathComponent("epic-installs.json")
++    }
++    func load() throws -> EpicInstaller.Store {
++        guard FileManager.default.fileExists(atPath: storeURL.path) else { return EpicInstaller.Store() }
++        return try JSONDecoder().decode(EpicInstaller.Store.self, from: Data(contentsOf: storeURL))
++    }
++    func save(_ store: EpicInstaller.Store) throws {
++        try FileManager.default.createDirectory(at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
++        try JSONEncoder().encode(store).write(to: storeURL, options: .atomic)
++    }
++    func exists(_ path: String) -> Bool { (try? safeURL(path, under: drive)).map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
++    private func safeURL(_ path: String, under root: URL) throws -> URL {
++        let path = path.replacingOccurrences(of: "\\", with: "/")
++        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
++        guard !path.isEmpty, !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." || $0.contains(":") || $0.contains("\0") }) else {
++            throw EpicContentError.invalid("Unsafe path in Epic content.")
++        }
++        let base = root.resolvingSymlinksInPath().standardizedFileURL
++        let url = base.appendingPathComponent(path).standardizedFileURL
++        // Reject existing symlinks too: writes must never escape through an old install.
++        var cursor = base
++        for part in parts {
++            cursor.appendPathComponent(String(part))
++            if let type = try? FileManager.default.attributesOfItem(atPath: cursor.path)[.type] as? FileAttributeType,
++               type == .typeSymbolicLink { throw EpicContentError.invalid("Epic install path contains a symbolic link.") }
++        }
++        guard url.path.hasPrefix(base.path + "/") else { throw EpicContentError.invalid("Unsafe Epic install path.") }
++        return url
++    }
++    private func folder(_ relative: String) throws -> URL {
++        guard relative.hasPrefix("Program Files/Epic Games/"), relative.split(separator: "/").count == 3 else {
++            throw EpicContentError.invalid("Invalid Epic install directory.")
++        }
++        return try safeURL(relative, under: drive)
++    }
++    func remove(_ relative: String) throws {
++        let url = try folder(relative)
++        if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
++    }
++    func run(_ job: EpicInstaller.Pending, catalog: String, token: String,
++             progress: @escaping @Sendable (SteamDownloadProgress) async -> Void) async throws -> EpicInstalledGame {
++        let (manifest, base) = try await EpicManifest.fetch(namespace: job.game.namespace, catalogItemID: catalog,
++                                                         appName: job.game.appName, token: token)
++        return try await assemble(job, manifest: manifest, base: base, progress: progress)
++    }
++    func assemble(_ job: EpicInstaller.Pending, manifest: EpicManifest, base: URL,
++                  fetch: @escaping @Sendable (URL, EpicManifest.Chunk) async throws -> Data = { url, chunk in
++                      try await EpicManifest.download(URLRequest(url: url), limit: chunk.fileSize)
++                  },
++                  progress: @escaping @Sendable (SteamDownloadProgress) async -> Void) async throws -> EpicInstalledGame {
++        try Task.checkCancellation()
++        // The build's own AppName can differ from the library's (another internal name,
++        // or other capitals) for the right game: the manifest came from that game's
++        // assets endpoint and matched Epic's SHA-1, and Legendary does not compare them.
++        // Logged, never fatal: refusing here stopped installs of games the account owns.
++        if manifest.meta.appName.caseInsensitiveCompare(job.game.appName) != .orderedSame {
++            LogStore.shared.log("[epic-install] manifest app name differs from the library's (accepted)")
++        }
++        let root = try folder(job.installDir), requestedLaunch = manifest.meta.launchExe.replacingOccurrences(of: "\\", with: "/")
++        _ = try safeURL(requestedLaunch, under: root)
++        if !manifest.meta.prereqPath.isEmpty { _ = try safeURL(manifest.meta.prereqPath, under: root) }
++        guard let launchFile = manifest.files.first(where: { $0.filename.replacingOccurrences(of: "\\", with: "/").caseInsensitiveCompare(requestedLaunch) == .orderedSame }) else {
++            throw EpicContentError.invalid("Epic manifest does not contain its launch executable.")
++        }
++        let launch = launchFile.filename.replacingOccurrences(of: "\\", with: "/")
++        let stagingKey = EpicSHA1.hash(Data(job.game.appName.utf8)).map { String(format: "%02x", $0) }.joined()
++        let staging = storeURL.deletingLastPathComponent().appendingPathComponent("Epic Staging/" + stagingKey)
++        // Only unfinished data lives here. A killed process cannot leave large orphan files in the game.
++        if FileManager.default.fileExists(atPath: staging.path) { try FileManager.default.removeItem(at: staging) }
++        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
++        defer { try? FileManager.default.removeItem(at: staging) }
++        var chunks: [String: EpicManifest.Chunk] = [:]
++        for chunk in manifest.chunks {
++            guard chunks[chunk.guid] == nil, chunk.windowSize > 0, chunk.windowSize <= EpicChunk.maximumSize,
++                  chunk.fileSize > 0, chunk.fileSize <= EpicChunk.maximumSize + 1024 else {
++                throw EpicContentError.invalid("Invalid Epic chunk description.")
++            }
++            _ = try chunk.path(featureLevel: manifest.meta.featureLevel)
++            chunks[chunk.guid] = chunk
++        }
++        var names = Set<String>(), remaining: [String: Int] = [:], files: [EpicManifest.File] = []
++        var required: UInt64 = 0, reused = 0
++        for file in manifest.files {
++            try Task.checkCancellation()
++            let url = try safeURL(file.filename, under: root)
++            guard file.symlink.isEmpty, names.insert(url.path.lowercased()).inserted else {
++                throw EpicContentError.invalid("Duplicate or symbolic-link file in Epic manifest.")
++            }
++            for part in file.parts {
++                guard let chunk = chunks[part.guid], part.offset <= chunk.windowSize, part.size <= chunk.windowSize - part.offset else {
++                    throw EpicContentError.invalid("Epic file references an invalid chunk part.")
++                }
++            }
++            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
++            if size.map(UInt64.init) == file.size, (try? EpicSHA1.file(url)) == file.sha { reused += 1; continue }
++            files.append(file); required += file.size
++            for part in file.parts { remaining[part.guid, default: 0] += 1 }
++        }
++        try FileManager.default.createDirectory(at: drive, withIntermediateDirectories: true)
++        let values = try drive.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
++        // Some volumes return zero for the reclaimable-space estimate despite having free blocks.
++        let capacity = max(values.volumeAvailableCapacityForImportantUsage ?? 0, Int64(values.volumeAvailableCapacity ?? 0))
++        guard UInt64(max(0, capacity)) >= required + 128 * 1024 * 1024 else {
++            throw EpicContentError.invalid("Not enough free space for this Epic game (\(required / 1024 / 1024) MB plus working space required).")
++        }
++        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
++        let total = remaining.keys.reduce(UInt64(0)) { $0 + UInt64(chunks[$1]!.fileSize) }
++        var status = SteamDownloadProgress(phase: .downloading, totalBytes: total)
++        var fetched = Set<String>(), received: UInt64 = 0
++        let start = Date()
++        LogStore.shared.log("[epic-install] start files=\(manifest.files.count) reused=\(reused) chunks=\(remaining.count) download-bytes=\(total) write-bytes=\(required)")
++        await progress(status)
++        var cache: [String: Data] = [:], lru: [String] = []
++        for file in files {
++            try Task.checkCancellation()
++            let target = try safeURL(file.filename, under: root)
++            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
++            // Publish only a verified file; a pause discards at most this file's unfinished data.
++            let temporary = staging.appendingPathComponent("file.part")
++            FileManager.default.createFile(atPath: temporary.path, contents: nil)
++            let handle = try FileHandle(forWritingTo: temporary)
++            do {
++                var hash = EpicSHA1()
++                for (index, part) in file.parts.enumerated() {
++                    try Task.checkCancellation()
++                    if cache[part.guid] == nil {
++                        var wanted: [EpicManifest.Chunk] = [], seen = Set<String>()
++                        for next in file.parts[index..<min(file.parts.count, index + 4)] where cache[next.guid] == nil && seen.insert(next.guid).inserted {
++                            wanted.append(chunks[next.guid]!)
++                        }
++                        let downloaded = try await withThrowingTaskGroup(of: (String, Data, Int).self) { group in
++                            for chunk in wanted {
++                                let url = base.appendingPathComponent(try chunk.path(featureLevel: manifest.meta.featureLevel))
++                                group.addTask {
++                                    let bytes = try await fetch(url, chunk)
++                                    try Task.checkCancellation()
++                                    return (chunk.guid, try EpicChunk.parse(bytes, expected: chunk), bytes.count)
++                                }
++                            }
++                            var result: [(String, Data, Int)] = []
++                            for try await item in group { result.append(item) }
++                            return result
++                        }
++                        // Bound retained data before adding at most four freshly downloaded chunks.
++                        while cache.values.reduce(0, { $0 + $1.count }) > 8 * 1024 * 1024, let oldest = lru.first {
++                            cache.removeValue(forKey: oldest); lru.removeFirst()
++                        }
++                        for (guid, data, bytes) in downloaded {
++                            cache[guid] = data; lru.removeAll { $0 == guid }; lru.append(guid)
++                            received += UInt64(bytes)
++                            if fetched.insert(guid).inserted { status.doneBytes += UInt64(bytes) }
++                        }
++                    }
++                    guard let data = cache[part.guid] else { throw EpicContentError.invalid("Missing Epic chunk.") }
++                    let bytes = data.subdata(in: part.offset..<part.offset + part.size)
++                    try handle.write(contentsOf: bytes); hash.update(bytes)
++                    remaining[part.guid, default: 0] -= 1
++                    lru.removeAll { $0 == part.guid }
++                    if remaining[part.guid] == 0 { cache.removeValue(forKey: part.guid) } else { lru.append(part.guid) }
++                    while cache.values.reduce(0, { $0 + $1.count }) > 8 * 1024 * 1024, let oldest = lru.first {
++                        cache.removeValue(forKey: oldest); lru.removeFirst()
++                    }
++                    status.bytesPerSecond = Double(received) / max(0.1, Date().timeIntervalSince(start))
++                    await progress(status)
++                }
++                guard hash.finish() == file.sha else { throw EpicContentError.invalid("Epic file SHA-1 mismatch. Resume to retry.") }
++                try handle.synchronize(); try handle.close()
++                try Task.checkCancellation()
++                // POSIX rename replaces atomically on the same volume, including an old partial install.
++                guard rename(temporary.path, target.path) == 0 else { throw EpicContentError.invalid("Could not finalize an Epic game file.") }
++            } catch {
++                try? handle.close(); try? FileManager.default.removeItem(at: temporary)
++                throw error
++            }
++        }
++        status.phase = .finishing; await progress(status)
++        LogStore.shared.log("[epic-install] finish files=\(manifest.files.count) reused=\(reused) chunks=\(fetched.count) received-bytes=\(received) written-bytes=\(required)")
++        return EpicInstalledGame(game: job.game, appName: job.game.appName, installDir: job.installDir,
++                                 buildVersion: manifest.meta.buildVersion, launchExe: launch, launchCommand: manifest.meta.launchCommand,
++                                 prereqName: manifest.meta.prereqName, prereqPath: manifest.meta.prereqPath, prereqArgs: manifest.meta.prereqArgs)
++    }
++}
+diff --git a/app/Madeira/Epic/EpicLibraryViews.swift b/app/Madeira/Epic/EpicLibraryViews.swift
+new file mode 100644
+index 0000000000..d8cca80213
+--- /dev/null
++++ b/app/Madeira/Epic/EpicLibraryViews.swift
+@@ -0,0 +1,436 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Madeira Converter Exception: see LICENSE-EXCEPTION.md
++//
++// The account's Epic Games in Madeira's library: cards in the Steam section's style
++// (tall box art, title, format pills or the download state), the library's Epic Games
++// section with its Not installed group, and a game page using the shared download and
++// Play controls.
++
++import SwiftUI
++
++/// An Epic artwork URL. A game that is not downloaded gets the Steam cards' soft
++/// circle of blur for the download glyph (SteamArtworkBlurSpot).
++struct EpicArtwork: View {
++    let url: URL?
++    var notDownloaded = false
++
++    var body: some View {
++        GeometryReader { geometry in
++            ZStack {
++                Color(uiColor: .secondarySystemFill)
++                if !notDownloaded {
++                    Image(systemName: "gamecontroller.fill").font(.largeTitle).foregroundStyle(.secondary)
++                }
++                AsyncImage(url: url) { phase in
++                    if case .success(let image) = phase {
++                        image.resizable().scaledToFill()
++                            .frame(width: geometry.size.width, height: geometry.size.height).clipped()
++                            .overlay { if notDownloaded { SteamArtworkBlurSpot(image: image, size: geometry.size) } }
++                    } else {
++                        Color.clear
++                    }
++                }
++            }
++            .frame(width: geometry.size.width, height: geometry.size.height).clipped()
++        }
++        .accessibilityHidden(true)
++    }
++}
++
++/// An Epic game's card, or its row in the list layouts, as SteamGameCell.
++struct EpicGameCard: View {
++    let game: EpicGame
++    var list = false
++    var dense = false
++    @ObservedObject private var installer = EpicInstaller.shared
++
++    /// Neither installed nor downloading.
++    private var notDownloaded: Bool { installer.installed[game.appName] == nil && !installer.isDownloading(game.appName) }
++
++    var body: some View {
++        let download = installer.installs[game.appName]?.download
++        Group {
++            if list && dense {
++                HStack(spacing: 10) {
++                    EpicArtwork(url: game.artworkURL, notDownloaded: notDownloaded).frame(width: 28, height: 42)
++                        .overlay { if notDownloaded { notDownloadedFace(.caption) } }
++                        .clipShape(RoundedRectangle(cornerRadius: 5))
++                    VStack(alignment: .leading, spacing: 2) {
++                        Text(game.title).font(.subheadline.weight(.semibold)).lineLimit(1)
++                        if let download { SteamDownloadStatus(download: download) }
++                    }
++                    Spacer(minLength: 6)
++                    pills.fixedSize()
++                }.padding(.horizontal, 8).padding(.vertical, 5)
++                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
++            } else if list {
++                HStack(spacing: 14) {
++                    EpicArtwork(url: game.artworkURL, notDownloaded: notDownloaded).frame(width: 48, height: 72)
++                        .overlay { overlay(download) }
++                        .overlay { if notDownloaded { notDownloadedFace(.title3) } }
++                        .clipShape(RoundedRectangle(cornerRadius: 8))
++                    VStack(alignment: .leading, spacing: 8) {
++                        Text(game.title).font(.headline).lineLimit(2)
++                        if let download { SteamDownloadStatus(download: download) } else { pills }
++                    }
++                    Spacer(minLength: 0)
++                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
++                }.padding(10).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
++            } else {
++                VStack(alignment: .leading, spacing: 6) {
++                    EpicArtwork(url: game.artworkURL, notDownloaded: notDownloaded).aspectRatio(2.0 / 3.0, contentMode: .fit)
++                        .overlay { overlay(download) }
++                        .overlay { if notDownloaded { notDownloadedFace(.largeTitle) } }
++                        .clipShape(RoundedRectangle(cornerRadius: 12))
++                        .modifier(LibraryCardArtworkPress { pressed, bounds in
++                            AmbientGlowItem(id: "epic-\(game.appName)", seed: game.appName.hashValue, art: .epic(game.artworkURL),
++                                            dimmed: notDownloaded, pressed: pressed, bounds: bounds)
++                        })
++                    Text(game.title).font(.subheadline.weight(.semibold)).lineLimit(2)
++                    pills
++                }.padding(4)
++            }
++        }
++        .foregroundStyle(.primary)
++        .accessibilityElement(children: .combine)
++    }
++
++    /// Once installed, the pills of any library game (bits, graphics API, size);
++    /// otherwise the download state in Steam's wording.
++    @ViewBuilder private var pills: some View {
++        if !installer.isDownloading(game.appName), let entry = installer.entry(game.appName) {
++            LibraryBadges(entry: entry).foregroundStyle(.secondary)
++        } else {
++            Text(state)
++                .font(.caption2.weight(.medium)).lineLimit(1)
++                .padding(.horizontal, 5).padding(.vertical, 4)
++                .background(.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
++                .foregroundStyle(.secondary)
++        }
++    }
++
++    private var state: String {
++        guard let download = installer.installs[game.appName]?.download else { return "Not installed" }
++        switch download.state {
++        case .queued: return "Waiting"
++        case .active: return "Downloading \(Int(download.progress.fraction * 100))%"
++        case .paused: return "Paused"
++        case .failed: return "Download failed"
++        }
++    }
++
++    /// The Steam cards' not-downloaded face: dimmed art under a download glyph.
++    private func notDownloadedFace(_ font: Font) -> some View {
++        ZStack {
++            Color.black.opacity(0.4)
++            Image(systemName: "icloud.and.arrow.down").font(font.weight(.medium))
++                .foregroundStyle(.white.opacity(0.5))
++        }
++    }
++
++    @ViewBuilder private func overlay(_ download: SteamOwnedLibrary.Download?) -> some View {
++        if let download {
++            ZStack {
++                Color.black.opacity(0.45)
++                switch download.state {
++                case .active: ProgressView(value: download.progress.fraction).progressViewStyle(.circular).tint(.white)
++                case .queued: Image(systemName: "clock").font(.title2).foregroundStyle(.white)
++                case .paused: Image(systemName: "pause.circle.fill").font(.title).foregroundStyle(.white)
++                case .failed: Image(systemName: "exclamationmark.triangle.fill").font(.title2).foregroundStyle(.yellow)
++                }
++            }
++        }
++    }
++}
++
++/// The library's Epic Games section, after Steam's: installed and downloading games
++/// under the title, then the account's other games under Not installed. An installed
++/// game opens its Game details page; any other its install page.
++struct EpicGamesSection: View {
++    let search: String
++    var layout = "cards"
++    var width: CGFloat = 390
++    var open: (LibraryEntry) -> Void
++    @ObservedObject private var library = EpicLibrary.shared
++    @ObservedObject private var auth = EpicAuth.shared
++    @ObservedObject private var installer = EpicInstaller.shared
++    @AppStorage("madeiraEpicHideInstalled") private var hideInstalled = false
++    @AppStorage("madeiraEpicShowUninstalled") private var showUninstalled = true
++    @State private var selected: EpicGame?
++
++    /// Whether the library has Epic games to show at all.
++    static var shown: Bool { !EpicInstaller.shared.installed.isEmpty || (EpicAuth.shared.signedIn && !EpicLibrary.shared.games.isEmpty) }
++
++    /// Pull to refresh on the library.
++    @MainActor static func refresh() async {
++        if EpicAuth.shared.signedIn { await EpicLibrary.shared.refresh() }
++    }
++
++    private var games: [EpicGame] {
++        var games = auth.signedIn ? library.games : []
++        let known = Set(games.map(\.appName))
++        games += installer.installed.values.map(\.game).filter { !known.contains($0.appName) }
++        return games.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
++            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
++    }
++
++    var body: some View {
++        let all = games
++        let onDevice = all.filter { installer.installed[$0.appName] != nil || installer.isDownloading($0.appName) }
++        let notInstalled = all.filter { installer.installed[$0.appName] == nil && !installer.isDownloading($0.appName) }
++        let collapsible = SteamGamesSection.collapsible
++        Group {
++            if Self.shown {
++                VStack(alignment: .leading, spacing: 14) {
++                    LibrarySectionHeader(title: "Epic Games", count: onDevice.count,
++                                         collapsed: collapsible ? $hideInstalled : nil) {
++                        if library.isLoading { ProgressView().accessibilityLabel("Refreshing Epic library") }
++                    }
++                    if !(hideInstalled && collapsible), !onDevice.isEmpty {
++                        LibraryCells(items: onDevice, layout: layout, width: width) { game, list, dense in
++                            card(game, list: list, dense: dense)
++                        }
++                    }
++                    if !notInstalled.isEmpty {
++                        Button {
++                            withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .easeInOut(duration: 0.2)) { showUninstalled.toggle() }
++                        } label: {
++                            HStack {
++                                Text("Not installed").font(.headline)
++                                Text("\(notInstalled.count)").font(.subheadline).foregroundStyle(.secondary)
++                                Spacer()
++                                Image(systemName: "chevron.right").font(.caption.weight(.semibold))
++                                    .rotationEffect(.degrees(showUninstalled ? 90 : 0)).foregroundStyle(.secondary)
++                            }.contentShape(Rectangle()).frame(minHeight: 44)
++                        }.buttonStyle(.plain)
++                            .accessibilityValue(showUninstalled ? "Shown" : "Hidden")
++                        if showUninstalled {
++                            LibraryCells(items: notInstalled, layout: layout, width: width) { game, list, dense in
++                                card(game, list: list, dense: dense)
++                            }
++                        }
++                    }
++                }
++            } else {
++                Color.clear.frame(height: 0).accessibilityHidden(true)
++            }
++        }
++        .onAppear { library.refreshIfStale() }
++        .sheet(item: $selected) { game in EpicGameSheet(game: game, open: open) }
++    }
++
++    private func card(_ game: EpicGame, list: Bool, dense: Bool) -> some View {
++        Button {
++            if !installer.isDownloading(game.appName), let entry = installer.entry(game.appName) { open(entry) }
++            else { selected = game }
++        } label: { EpicGameCard(game: game, list: list, dense: dense) }
++            .libraryCardButtonStyle(grid: !list)
++    }
++}
++
++/// An Epic game's install page, laid out exactly as Steam's (SteamGameSheet): the cover
++/// with the name and one action (Install, Pause, Resume, Try again, Open) over the blurred
++/// art, the download, the sizes beside the free space, then the store link.
++struct EpicGameSheet: View {
++    let game: EpicGame
++    /// Opens the installed game's Game details page (after this sheet closes).
++    var open: (LibraryEntry) -> Void
++    @ObservedObject private var installer = EpicInstaller.shared
++    @ObservedObject private var sizes = EpicSizes.shared
++    @Environment(\.dismiss) private var dismiss
++    @State private var confirmCancel = false
++
++    var body: some View {
++        NavigationStack {
++            Form {
++                Section {
++                    HStack(spacing: 20) {
++                        EpicArtwork(url: game.artworkURL).frame(width: 120, height: 180)
++                            .clipShape(RoundedRectangle(cornerRadius: 14))
++                        VStack(alignment: .leading, spacing: 12) {
++                            Text(game.title).font(.title2.bold())
++                            primaryAction
++                        }
++                    }.padding(.vertical, 24)
++                        .listRowBackground(
++                            EpicArtwork(url: game.heroURL ?? game.artworkURL).blur(radius: 4)
++                                .overlay(Color(uiColor: .secondarySystemGroupedBackground).opacity(0.55))
++                                .clipped()
++                        )
++                }
++                if let download = installer.installs[game.appName]?.download {
++                    Section("Download") {
++                        SteamDownloadStatus(download: download)
++                        Button("Cancel download", role: .destructive) { confirmCancel = true }
++                        if case .failed = download.state {
++                            Text("Downloaded files are kept. Try again to continue where it stopped.")
++                                .font(.caption).foregroundStyle(.secondary)
++                        }
++                    }
++                }
++                Section {
++                    // The game's sizes from its manifest, before Install, next to the free
++                    // space (red when the installed game would not fit).
++                    let installed = installer.installed[game.appName] != nil
++                    let size = sizes.sizes[game.appName]
++                    let free = Int64(clamping: EpicSizes.free)
++                    if !installed {
++                        if let size {
++                            LabeledContent("Download size", value: EpicSizeRow.format(size.download))
++                            LabeledContent("Installed size", value: EpicSizeRow.format(size.install))
++                        } else {
++                            LabeledContent("Download size") { ProgressView() }
++                        }
++                    }
++                    let tooBig = !installed && size.map { Int64(clamping: $0.install) > free } == true
++                    LabeledContent("Free space on this device") {
++                        Text(EpicSizeRow.format(UInt64(max(0, free)))).foregroundStyle(tooBig ? Color.red : Color.secondary)
++                    }
++                }
++                Section {
++                    if let url = URL(string: "https://store.epicgames.com/browse?q=" + (game.title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) {
++                        Link(destination: url) { Label("View in the Epic Games Store", systemImage: "safari") }
++                    }
++                }
++                if let error = installer.error {
++                    Section { Text(error).font(.footnote).foregroundStyle(.red) }
++                }
++            }
++            .navigationTitle("Epic Games").navigationBarTitleDisplayMode(.inline)
++            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
++            .task { sizes.load(game) }
++            .confirmationDialog("Cancel this download? Downloaded files are deleted.", isPresented: $confirmCancel, titleVisibility: .visible) {
++                Button("Cancel download", role: .destructive) { installer.cancel(game.appName) }
++                Button("Keep downloading", role: .cancel) {}
++            }
++        }
++    }
++
++
++    @ViewBuilder private var primaryAction: some View {
++        if installer.installed[game.appName] != nil, !installer.isDownloading(game.appName),
++           let entry = installer.entry(game.appName) {
++            // Installed: its Game details page.
++            Button { dismiss(); open(entry) } label: {
++                HStack(spacing: 10) { Image(systemName: "play.fill"); Text("Open").fontWeight(.semibold) }.frame(minWidth: 100, minHeight: 30)
++            }.buttonStyle(.borderedProminent)
++        } else if let download = installer.installs[game.appName]?.download {
++            switch download.state {
++            case .active, .queued:
++                Button { installer.pause(game.appName) } label: { steamActionLabel("Pause", symbol: "pause.fill") }
++                    .buttonStyle(.bordered)
++            case .paused:
++                Button { installer.install(game) } label: { steamActionLabel("Resume", symbol: "arrow.down.circle.fill") }
++                    .buttonStyle(.borderedProminent)
++            case .failed:
++                Button { installer.install(game) } label: { steamActionLabel("Try again", symbol: "arrow.clockwise") }
++                    .buttonStyle(.borderedProminent)
++            }
++        } else {
++            Button { installer.install(game) } label: { steamActionLabel("Install", symbol: "arrow.down.circle.fill") }
++                .buttonStyle(.borderedProminent).disabled(!installer.ready)
++        }
++    }
++}
++
++/// "Download 2.1 GB · Installed 4.8 GB · 37 GB free", red when the game will not fit.
++struct EpicSizeRow: View {
++    let game: EpicGame
++    @ObservedObject private var sizes = EpicSizes.shared
++
++    var body: some View {
++        let free = EpicSizes.free
++        Group {
++            if let size = sizes.sizes[game.appName] {
++                let fits = free >= size.install + 128 * 1024 * 1024
++                HStack(spacing: 6) {
++                    Text("Download \(Self.format(size.download))")
++                    Text("·")
++                    Text("Installed \(Self.format(size.install))")
++                    Text("·")
++                    Text("\(Self.format(free)) free").foregroundStyle(fits ? Color.secondary : Color.red)
++                }
++            } else {
++                HStack(spacing: 6) {
++                    ProgressView().controlSize(.small)
++                    Text("Checking size · \(Self.format(free)) free")
++                }
++            }
++        }
++        .font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
++        .task { sizes.load(game) }
++    }
++
++    static func format(_ bytes: UInt64) -> String {
++        ByteCountFormatter.string(fromByteCount: Int64(min(bytes, UInt64(Int64.max))), countStyle: .file)
++    }
++}
++
++/// Game details › Epic Games, for an installed Epic game (as SteamEntrySection is for
++/// Steam's): its version, its prerequisites installer, and Uninstall.
++struct EpicEntrySection: View {
++    let appName: String
++    /// Starts a program as a library session (the prerequisites installer).
++    var run: (LibraryEntry) -> Void
++    /// Closes the details page (after Uninstall).
++    var leave: () -> Void
++    @ObservedObject private var installer = EpicInstaller.shared
++    @State private var confirmUninstall = false
++
++    var body: some View {
++        if let record = installer.installed[appName] {
++            Section {
++                if !record.buildVersion.isEmpty { LabeledContent("Version", value: record.buildVersion) }
++                if !record.prereqPath.isEmpty {
++                    Button("Install prerequisites", systemImage: "shippingbox") {
++                        var prerequisite = LibraryEntry(title: record.prereqName.isEmpty ? "Prerequisites" : record.prereqName,
++                                                        relativePath: record.installDir + "/" + record.prereqPath.replacingOccurrences(of: "\\", with: "/"),
++                                                        bits: 0)
++                        prerequisite.arguments = record.prereqArgs
++                        run(prerequisite)
++                    }
++                }
++                Button("Uninstall", role: .destructive) { confirmUninstall = true }
++            } header: { Text("Epic Games") }
++            .confirmationDialog("Uninstall \(record.game.title)? Its files are deleted from this device.",
++                                isPresented: $confirmUninstall, titleVisibility: .visible) {
++                Button("Uninstall", role: .destructive) {
++                    installer.uninstall(appName)
++                    leave()
++                }
++            }
++        }
++    }
++}
++
++/// What an Epic game will take, shown on its page before Install: the download (the
++/// compressed chunks) and the installed size (the files), from the game's manifest,
++/// with the device's free space. Fetched when the page opens; kept per game.
++@MainActor final class EpicSizes: ObservableObject {
++    static let shared = EpicSizes()
++    struct Size { var download: UInt64; var install: UInt64 }
++    @Published private(set) var sizes: [String: Size] = [:]
++    private var loading: Set<String> = []
++
++    func load(_ game: EpicGame) {
++        guard sizes[game.appName] == nil, !loading.contains(game.appName),
++              let catalog = game.catalogItemId, !catalog.isEmpty else { return }
++        loading.insert(game.appName)
++        Task {
++            defer { loading.remove(game.appName) }
++            guard let token = try? await EpicAuth.shared.validAccessToken(),
++                  let (manifest, _) = try? await EpicManifest.fetch(namespace: game.namespace, catalogItemID: catalog,
++                                                                    appName: game.appName, token: token) else { return }
++            sizes[game.appName] = Size(download: manifest.chunks.reduce(0) { $0 + UInt64(max(0, $1.fileSize)) },
++                                       install: manifest.files.reduce(0) { $0 + $1.size })
++        }
++    }
++
++    /// Free space where games are installed (the same measure the installer checks).
++    nonisolated static var free: UInt64 {
++        let values = try? LibraryModel.drive.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey,
++                                                                      .volumeAvailableCapacityKey])
++        return UInt64(max(0, max(values?.volumeAvailableCapacityForImportantUsage ?? 0,
++                                 Int64(values?.volumeAvailableCapacity ?? 0))))
++    }
++}
+diff --git a/app/Madeira/Epic/EpicManifest.swift b/app/Madeira/Epic/EpicManifest.swift
+new file mode 100644
+index 0000000000..c1218db7cb
+--- /dev/null
++++ b/app/Madeira/Epic/EpicManifest.swift
+@@ -0,0 +1,289 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Madeira Converter Exception: see LICENSE-EXCEPTION.md
++// Ported from Legendary's models/manifest.py, json_manifest.py and api/egs.py.
++
++import Foundation
++
++struct EpicManifest {
++    struct Meta {
++        var featureLevel = 18
++        var appName = "", buildVersion = "", launchExe = "", launchCommand = ""
++        var prereqIDs: [String] = []
++        var prereqName = "", prereqPath = "", prereqArgs = ""
++    }
++    struct Chunk {
++        var guid = ""
++        var hash: UInt64 = 0
++        var sha = Data()
++        var group = 0, windowSize = 0, fileSize = 0
++        var secret = Data(repeating: 0, count: 16)
++
++        func path(featureLevel: Int) throws -> String {
++            if featureLevel >= 22 {
++                guard secret.allSatisfy({ $0 == 0 }) else { throw EpicContentError.invalid("Encrypted Epic chunks need a content secret.") }
++                func base64(_ data: Data) -> String {
++                    data.base64EncodedString().replacingOccurrences(of: "+", with: "-")
++                        .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
++                }
++                let words = try EpicManifest.hex(guid, count: 16)
++                var littleGUID = Data()
++                for i in stride(from: 0, to: 16, by: 4) { littleGUID.append(contentsOf: words[i..<i + 4].reversed()) }
++                let littleHash = Data((0..<8).map { UInt8(truncatingIfNeeded: hash >> ($0 * 8)) })
++                return "ChunksV5/plain/\(String(format: "%02d", group))/\(base64(littleHash))_\(base64(littleGUID)).chunk"
++            }
++            let directory = featureLevel >= 15 ? "ChunksV4" : featureLevel >= 6 ? "ChunksV3" : featureLevel >= 3 ? "ChunksV2" : "Chunks"
++            return String(format: "%@/%02d/%016llX_%@.chunk", directory, group, hash, guid)
++        }
++    }
++    struct Part { var guid: String; var offset: Int; var size: Int }
++    struct File {
++        var filename = "", symlink = ""
++        var sha = Data()
++        var flags: UInt64 = 0
++        var tags: [String] = []
++        var parts: [Part] = []
++        var size: UInt64 { parts.reduce(0) { $0 + UInt64($1.size) } }
++    }
++    var meta = Meta()
++    var chunks: [Chunk] = []
++    var files: [File] = []
++    var customFields: [String: String] = [:]
++    static let maximumSize = 128 * 1024 * 1024
++
++    static func parse(_ data: Data) throws -> Self {
++        guard data.count <= maximumSize else { throw EpicContentError.invalid("Epic manifest is too large.") }
++        if data.first(where: { ![9, 10, 13, 32].contains($0) }) == 123 { return try json(data) }
++        var header = EpicReader(data: data)
++        guard try header.u32() == 0x44BEC00C else { throw EpicContentError.invalid("Invalid Epic manifest magic.") }
++        let headerSize = try header.u32(), size = try header.u32(), compressedSize = try header.u32()
++        let sha = try header.bytes(20), stored = try header.number(1), version = try header.u32()
++        guard stored & ~1 == 0 else { throw EpicContentError.invalid("Encrypted Epic manifests are not supported.") }
++        if version >= 22 { _ = try header.bytes(32) }
++        guard headerSize >= header.position, headerSize <= data.count, compressedSize == data.count - headerSize else {
++            throw EpicContentError.invalid("Invalid Epic manifest size.")
++        }
++        _ = try header.bytes(headerSize - header.position)
++        let payload = try header.bytes(compressedSize)
++        let body = stored & 1 != 0 ? try EpicChunk.inflate(payload, size: size, limit: maximumSize) : payload
++        guard body.count == size, EpicSHA1.hash(body) == sha else { throw EpicContentError.invalid("Epic manifest SHA-1 mismatch.") }
++        var r = EpicReader(data: body), result = Self()
++        var m = try r.section()
++        let metaVersion = try m.number(1)
++        result.meta.featureLevel = try m.u32()
++        guard try m.number(1) == 0 else { throw EpicContentError.invalid("Legacy file-data manifests are not supported.") }
++        _ = try m.u32()
++        result.meta.appName = try m.string(); result.meta.buildVersion = try m.string()
++        result.meta.launchExe = try m.string(); result.meta.launchCommand = try m.string()
++        result.meta.prereqIDs = try m.strings()
++        result.meta.prereqName = try m.string(); result.meta.prereqPath = try m.string(); result.meta.prereqArgs = try m.string()
++        if metaVersion >= 1 { _ = try m.string() }
++        if metaVersion >= 2 { _ = try m.string(); _ = try m.string() }
++
++        // These lists are columnar: all GUIDs, then all hashes, rather than one record at a time.
++        var c = try r.section()
++        _ = try c.number(1)
++        let chunkCount = try c.boundedCount()
++        guard chunkCount <= c.data.count / 57 else { throw EpicContentError.invalid("Invalid Epic chunk count.") }
++        result.chunks = [Chunk](repeating: Chunk(), count: chunkCount)
++        for i in 0..<chunkCount { result.chunks[i].guid = try c.guid() }
++        for i in 0..<chunkCount { result.chunks[i].hash = try c.number(8) }
++        for i in 0..<chunkCount { result.chunks[i].sha = try c.bytes(20) }
++        for i in 0..<chunkCount { result.chunks[i].group = Int(try c.number(1)) }
++        for i in 0..<chunkCount { result.chunks[i].windowSize = try c.u32() }
++        for i in 0..<chunkCount {
++            let size = try c.number(8)
++            guard size <= UInt64(Int.max) else { throw EpicContentError.invalid("Invalid Epic chunk file size.") }
++            result.chunks[i].fileSize = Int(size)
++        }
++        if result.meta.featureLevel >= 22 {
++            for i in 0..<chunkCount { result.chunks[i].secret = try c.bytes(16) }
++            _ = try c.bytes(chunkCount * 20)
++        }
++        var f = try r.section()
++        let fileVersion = try f.number(1), fileCount = try f.boundedCount()
++        guard fileCount <= f.data.count / 37 else { throw EpicContentError.invalid("Invalid Epic file count.") }
++        result.files = [File](repeating: File(), count: fileCount)
++        for i in 0..<fileCount { result.files[i].filename = try f.string() }
++        for i in 0..<fileCount { result.files[i].symlink = try f.string() }
++        for i in 0..<fileCount { result.files[i].sha = try f.bytes(20) }
++        for i in 0..<fileCount { result.files[i].flags = try f.number(1) }
++        for i in 0..<fileCount { result.files[i].tags = try f.strings() }
++        for i in 0..<fileCount {
++            let count = try f.boundedCount()
++            for _ in 0..<count {
++                var p = try f.section()
++                result.files[i].parts.append(Part(guid: try p.guid(), offset: try p.u32(), size: try p.u32()))
++            }
++        }
++        if fileVersion >= 1 {
++            for _ in 0..<fileCount { if try f.u32() != 0 { _ = try f.bytes(16) } }
++            for _ in 0..<fileCount { _ = try f.string() }
++        }
++        if fileVersion >= 2 { _ = try f.bytes(fileCount * 32) }
++        var fields = try r.section()
++        _ = try fields.number(1)
++        let fieldCount = try fields.boundedCount()
++        let keys = try (0..<fieldCount).map { _ in try fields.string() }
++        for key in keys { result.customFields[key] = try fields.string() }
++        return result
++    }
++
++    static func hex(_ string: String, count: Int) throws -> Data {
++        let chars = Array(string.utf8)
++        guard chars.count == count * 2 else { throw EpicContentError.invalid("Invalid Epic hexadecimal field.") }
++        var result = Data()
++        for i in stride(from: 0, to: chars.count, by: 2) {
++            guard let byte = UInt8(String(decoding: chars[i..<i + 2], as: UTF8.self), radix: 16) else {
++                throw EpicContentError.invalid("Invalid Epic hexadecimal field.")
++            }
++            result.append(byte)
++        }
++        return result
++    }
++    private static func blob(_ value: Any?) throws -> Data {
++        guard let value = value as? String, value.utf8.count % 3 == 0 else { throw EpicContentError.invalid("Invalid Epic JSON blob.") }
++        let chars = Array(value.utf8)
++        var data = Data()
++        for i in stride(from: 0, to: chars.count, by: 3) {
++            guard let byte = UInt8(String(decoding: chars[i..<i + 3], as: UTF8.self)) else {
++                throw EpicContentError.invalid("Invalid Epic JSON byte.")
++            }
++            data.append(byte)
++        }
++        return data
++    }
++    private static func number(_ value: Any?) throws -> UInt64 {
++        let data = try blob(value)
++        guard data.count <= 8 else { throw EpicContentError.invalid("Invalid Epic JSON number.") }
++        var r = EpicReader(data: data)
++        return try r.number(data.count)
++    }
++    private static func json(_ data: Data) throws -> Self {
++        guard let j = try JSONSerialization.jsonObject(with: data) as? [String: Any],
++              let sizes = j["ChunkFilesizeList"] as? [String: String],
++              let hashes = j["ChunkHashList"] as? [String: String],
++              let shas = j["ChunkShaList"] as? [String: String],
++              let groups = j["DataGroupList"] as? [String: String],
++              let files = j["FileManifestList"] as? [[String: Any]], j["bIsFileData"] as? Bool != true else {
++            throw EpicContentError.invalid("Invalid or unsupported Epic JSON manifest.")
++        }
++        func integer(_ value: Any?) throws -> Int {
++            let n = try number(value)
++            guard n <= UInt64(Int.max) else { throw EpicContentError.invalid("Invalid Epic JSON size.") }
++            return Int(n)
++        }
++        var result = Self()
++        result.meta.featureLevel = try integer(j["ManifestFileVersion"] ?? "013000000000")
++        result.meta.appName = j["AppNameString"] as? String ?? ""
++        result.meta.buildVersion = j["BuildVersionString"] as? String ?? ""
++        result.meta.launchExe = j["LaunchExeString"] as? String ?? ""
++        result.meta.launchCommand = j["LaunchCommand"] as? String ?? ""
++        result.meta.prereqIDs = j["PrereqIds"] as? [String] ?? []
++        result.meta.prereqName = j["PrereqName"] as? String ?? ""
++        result.meta.prereqPath = j["PrereqPath"] as? String ?? ""
++        result.meta.prereqArgs = j["PrereqArgs"] as? String ?? ""
++        for guid in sizes.keys.sorted() {
++            _ = try hex(guid, count: 16)
++            result.chunks.append(Chunk(guid: guid.uppercased(), hash: try number(hashes[guid]),
++                                       sha: try hex(shas[guid] ?? "", count: 20), group: try integer(groups[guid]),
++                                       windowSize: 1024 * 1024, fileSize: try integer(sizes[guid])))
++        }
++        for item in files {
++            guard let name = item["Filename"] as? String, let parts = item["FileChunkParts"] as? [[String: String]] else {
++                throw EpicContentError.invalid("Invalid Epic JSON file.")
++            }
++            var file = File(filename: name, sha: try blob(item["FileHash"]))
++            guard file.sha.count == 20 else { throw EpicContentError.invalid("Invalid Epic file SHA-1.") }
++            file.tags = item["InstallTags"] as? [String] ?? []
++            file.flags = (item["bIsReadOnly"] as? Bool == true ? 1 : 0) |
++                (item["bIsCompressed"] as? Bool == true ? 2 : 0) | (item["bIsUnixExecutable"] as? Bool == true ? 4 : 0)
++            for part in parts {
++                let guid = part["Guid"] ?? ""
++                _ = try hex(guid, count: 16)
++                file.parts.append(Part(guid: guid.uppercased(), offset: try integer(part["Offset"]), size: try integer(part["Size"])))
++            }
++            result.files.append(file)
++        }
++        result.customFields = j["CustomFields"] as? [String: String] ?? [:]
++        return result
++    }
++
++    private static let launcherHost = "https://launcher-public-service-prod06.ol.epicgames.com/launcher/api/public/assets"
++
++    private static func launcherRequest(_ url: URL, token: String) -> URLRequest {
++        var request = URLRequest(url: url)
++        request.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
++        request.setValue("UELauncher/11.0.1-14907503+++Portal+Release-Live Windows/10.0.19041.1.256.64bit", forHTTPHeaderField: "User-Agent")
++        return request
++    }
++
++    /// The library can list an entitlement under an app name that has no Windows
++    /// build (Dead Cells: a hex id, 404). Legendary takes app names from the Windows
++    /// asset list instead; look the game up there by namespace and catalog item.
++    private static func windowsAppName(namespace: String, catalogItemID: String, token: String) async throws -> String? {
++        var components = URLComponents(string: launcherHost + "/Windows")!
++        components.queryItems = [URLQueryItem(name: "label", value: "Live")]
++        let data = try await download(launcherRequest(components.url!, token: token), limit: 16 * 1024 * 1024)
++        let assets = (try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? [])
++            .filter { $0["namespace"] as? String == namespace }
++        let match = assets.first { $0["catalogItemId"] as? String == catalogItemID } ?? (assets.count == 1 ? assets[0] : nil)
++        return match?["appName"] as? String
++    }
++
++    static func fetch(namespace: String, catalogItemID: String, appName: String, token: String) async throws -> (Self, URL) {
++        func assetURL(_ app: String) -> URL {
++            var url = URL(string: launcherHost + "/v2/platform/Windows/namespace")!
++            for part in [namespace, "catalogItem", catalogItemID, "app", app, "label", "Live"] { url.appendPathComponent(part) }
++            return url
++        }
++        let data: Data
++        do {
++            data = try await download(launcherRequest(assetURL(appName), token: token), limit: 4 * 1024 * 1024)
++        } catch EpicContentError.httpStatus(404) {
++            guard let windowsName = try await windowsAppName(namespace: namespace, catalogItemID: catalogItemID, token: token),
++                  windowsName != appName
++            else { throw EpicContentError.invalid("Epic has no Windows version of this game for your account.") }
++            data = try await download(launcherRequest(assetURL(windowsName), token: token), limit: 4 * 1024 * 1024)
++        }
++        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
++              let element = (json["elements"] as? [[String: Any]])?.first,
++              let manifests = element["manifests"] as? [[String: Any]], !manifests.isEmpty
++        else { throw EpicContentError.invalid("Epic did not return a Windows manifest.") }
++        // Epic lists the same manifest on several CDNs, each with its own signed query.
++        // One often refuses a given game (403/404): try them in order, as Legendary
++        // does, and keep the base of the one that answered for the chunks.
++        var lastError: Error = EpicContentError.invalid("Epic did not return a Windows manifest.")
++        for manifest in manifests {
++            guard let uri = manifest["uri"] as? String, var components = URLComponents(string: uri),
++                  let original = components.url else { continue }
++            if let params = manifest["queryParams"] as? [[String: String]] {
++                components.queryItems = (components.queryItems ?? []) + params.compactMap { param in
++                    param["name"].map { URLQueryItem(name: $0, value: param["value"]) }
++                }
++            }
++            guard let manifestURL = components.url else { continue }
++            let bytes: Data
++            do { bytes = try await download(URLRequest(url: manifestURL), limit: maximumSize) }
++            catch { lastError = error; continue }
++            if let hash = element["hash"] as? String, EpicSHA1.hash(bytes) != (try hex(hash, count: 20)) {
++                lastError = EpicContentError.invalid("Epic CDN manifest SHA-1 mismatch.")
++                continue
++            }
++            var base = URLComponents(url: original.deletingLastPathComponent(), resolvingAgainstBaseURL: false)!
++            base.query = nil; base.fragment = nil
++            return (try parse(bytes), base.url!)
++        }
++        throw lastError
++    }
++
++    /// URLSession spools responses to disk so a bad CDN response cannot fill RAM.
++    static func download(_ request: URLRequest, limit: Int) async throws -> Data {
++        let (file, response) = try await URLSession.shared.download(for: request)
++        defer { try? FileManager.default.removeItem(at: file) }
++        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
++        guard status == 200 else { throw EpicContentError.httpStatus(status) }
++        let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
++        guard size <= limit else { throw EpicContentError.invalid("Epic download exceeds the size limit.") }
++        return try Data(contentsOf: file)
++    }
++}
+diff --git a/app/Madeira/Epic/EpicSignInView.swift b/app/Madeira/Epic/EpicSignInView.swift
+new file mode 100644
+index 0000000000..ecd2fe5dfd
+--- /dev/null
++++ b/app/Madeira/Epic/EpicSignInView.swift
+@@ -0,0 +1,124 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright 2026 125hz
++// Madeira Converter Exception: see LICENSE-EXCEPTION.md
++//
++// Epic Games sign-in sheet: log in on Epic's site in an embedded web view
++// (the authorizationCode is captured automatically), or paste one manually.
++// When signed in it shows the account and the owned-games list.
++
++import SwiftUI
++
++struct EpicSignInView: View {
++    @ObservedObject private var auth = EpicAuth.shared
++    @ObservedObject private var library = EpicLibrary.shared
++    @Environment(\.dismiss) private var dismiss
++    @State private var showPaste = false
++    @State private var pastedCode = ""
++
++    var body: some View {
++        NavigationStack {
++            Group {
++                if let name = auth.accountName {
++                    account(name)
++                } else {
++                    login
++                }
++            }
++            .navigationTitle("Epic Games").navigationBarTitleDisplayMode(.inline)
++            .toolbar {
++                ToolbarItem(placement: .cancellationAction) {
++                    Button(auth.signedIn ? "Done" : "Cancel") { dismiss() }
++                }
++                if !auth.signedIn {
++                    ToolbarItem(placement: .primaryAction) {
++                        Menu {
++                            Button("Paste an authorization code") { showPaste = true }
++                        } label: { Image(systemName: "ellipsis.circle") }
++                    }
++                }
++            }
++            .alert("Authorization code", isPresented: $showPaste) {
++                TextField("authorizationCode", text: $pastedCode)
++                    .textInputAutocapitalization(.never).autocorrectionDisabled()
++                Button("Sign in") {
++                    auth.exchange(authorizationCode: EpicAuth.extractCode(from: pastedCode))
++                    pastedCode = ""
++                }
++                Button("Cancel", role: .cancel) { pastedCode = "" }
++            }
++            .onAppear { auth.refresh() }
++            // Signed in from the login page: fetch the games and close, like Steam's sign-in.
++            .onChange(of: auth.accountName) { old, name in
++                guard name != nil else { library.clear(); return }
++                library.refresh()
++                if old == nil { dismiss() }
++            }
++        }
++    }
++
++    /// Epic's own login page, filling the sheet; the authorization code it ends on is
++    /// captured and exchanged without the user seeing it.
++    private var login: some View {
++        ZStack {
++            EpicLoginWebView { code in auth.exchange(authorizationCode: code) }
++                .ignoresSafeArea(edges: .bottom)
++            if auth.isBusy {
++                Color(uiColor: .systemBackground).opacity(0.85).ignoresSafeArea()
++                ProgressView("Signing in…")
++            }
++        }
++        .safeAreaInset(edge: .bottom) {
++            if let error = auth.signInError {
++                Label(error, systemImage: "exclamationmark.triangle.fill")
++                    .font(.footnote).foregroundStyle(.red)
++                    .padding(12).frame(maxWidth: .infinity)
++                    .background(.regularMaterial)
++            }
++        }
++    }
++
++    private func account(_ name: String) -> some View {
++        Form {
++            Section {
++                LabeledContent("Signed in as", value: name.isEmpty ? "Epic account" : name)
++                LabeledContent("Games", value: library.isLoading ? "Loading…" : "\(library.games.count)")
++                Button("Sign out of Epic Games", role: .destructive) {
++                    auth.signOut()
++                    library.clear()
++                }
++            }
++            if let error = library.error {
++                Section { Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red) }
++            }
++        }
++    }
++}
++
++/// Settings › Epic Games, after Steam's section: the account and Sign out, or Sign in.
++/// The sheet is presented by LibraryView, as Steam's (SteamSettingsSection).
++struct EpicSettingsSection: View {
++    let open: (SettingsSheet) -> Void
++    @ObservedObject private var auth = EpicAuth.shared
++    @State private var confirmSignOut = false
++
++    var body: some View {
++        Section {
++            if let name = auth.accountName {
++                LabeledContent("Signed in as", value: name.isEmpty ? "Epic account" : name)
++                Button("Sign out of Epic Games", role: .destructive) { confirmSignOut = true }
++            } else {
++                Button { open(.epicSignIn) } label: { Label("Sign in to Epic Games", systemImage: "person.crop.circle.badge.plus") }
++            }
++        } header: {
++            Text("Epic Games")
++        } footer: {
++            Text("You sign in on Epic's own page. Madeira keeps the Epic sign-in token in this device's Keychain; signing out removes it.")
++        }
++        .confirmationDialog("Sign out of Epic Games?", isPresented: $confirmSignOut, titleVisibility: .visible) {
++            Button("Sign out", role: .destructive) {
++                auth.signOut()
++                EpicLibrary.shared.clear()
++            }
++        }
++    }
++}
+diff --git a/app/Madeira/Library.swift b/app/Madeira/Library.swift
+index 7b22ca3154..7ff18c0780 100644
+--- a/app/Madeira/Library.swift
++++ b/app/Madeira/Library.swift
+@@ -243,6 +243,11 @@ struct LibraryEntry: Codable, Identifiable {
+     /// through Valve's client, with Steam's default launch option.
+     /// `relativePath` is then its install folder, relative to drive_c.
+     var steamAppID: Int?
++    /// Epic's installed app and public art; optional for older library files.
++    var epicAppName: String?
++    var epicLaunchCommand: String?
++    var epicArtworkURL: URL?
++    var epicHeroURL: URL?
+     /// How a Steam game starts (Game details › Steam › Start with): nil is Madeira
+     /// Dock, the default; "game" is the game's own program in Wine, without Steam
+     /// (SteamDirectStart).
+@@ -713,7 +718,8 @@ final class LibraryModel: ObservableObject {
+         // A Steam game has one entry: a details page opened before its card first saved
+         // one (refreshSteamMetadata) updates that entry.
+         if let i = next.firstIndex(where: { $0.id == entry.id }) ??
+-            next.firstIndex(where: { entry.steamAppID != nil && $0.steamAppID == entry.steamAppID }) {
++            next.firstIndex(where: { entry.steamAppID != nil && $0.steamAppID == entry.steamAppID }) ??
++            next.firstIndex(where: { entry.epicAppName != nil && $0.epicAppName == entry.epicAppName }) {
+             // A details sheet may predate an asynchronous metadata refresh.
+             if (next[i].metadataChecked ?? .distantPast) > (entry.metadataChecked ?? .distantPast) {
+                 entry.folderBytes = next[i].folderBytes; entry.graphicsAPI = next[i].graphicsAPI
+@@ -1585,6 +1591,8 @@ struct LibraryArtwork: View {
+                let image = UIImage(contentsOfFile: LibraryModel.documents.appendingPathComponent("madeira-art/" + URL(fileURLWithPath: name).lastPathComponent).path) {
+                 Image(uiImage: image).resizable().scaledToFill()
+                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center).clipped()
++            } else if let url = backdrop ? (entry.epicHeroURL ?? entry.epicArtworkURL) : entry.epicArtworkURL {
++                EpicArtwork(url: url)
+             } else if let id = entry.steamID ?? entry.steamAppID {   // a store match, else the Steam game itself
+                 AsyncImage(url: backdrop ? SteamCatalog.hero(id) : SteamCatalog.cover(id)) { image in
+                     image.resizable().scaledToFill()
+@@ -1840,6 +1848,8 @@ struct AmbientGlow: View {
+ enum AmbientArt {
+     case steam(Int)
+     case library(LibraryEntry)
++    /// An Epic game's box art (Epic/EpicLibraryViews.swift).
++    case epic(URL?)
+ }
+ 
+ /// A grid card's artwork frame and what its glow is made of, reported up to the
+@@ -1916,9 +1926,13 @@ enum AmbientArtwork {
+             if let name = entry.coverFile {
+                 image = UIImage(contentsOfFile: LibraryModel.documents
+                     .appendingPathComponent("madeira-art/" + URL(fileURLWithPath: name).lastPathComponent).path)
++            } else if let url = entry.epicArtworkURL {
++                image = await fetch(url)
+             } else if let id = entry.steamID ?? entry.steamAppID, let url = SteamCatalog.cover(id) {
+                 image = await fetch(url)
+             }
++        case .epic(let url):
++            if let url { image = await fetch(url) }
+         }
+         guard let image, image.size.width > 0 else { return nil }
+         let size = CGSize(width: 96, height: (96 * image.size.height / image.size.width).rounded())
+@@ -2283,7 +2297,8 @@ struct LibraryGroupedGames<LocalCell: View>: View {
+         var steamEntries: [Int: (position: Int, entry: LibraryEntry)] = [:]
+         for (position, entry) in library.entries.enumerated() where entry.desktop != true {
+             if let appID = entry.steamAppID { steamEntries[appID] = (position, entry) }
+-            else if query.isEmpty || entry.title.localizedCaseInsensitiveContains(query) {
++            // Installed Epic games are listed by the Epic Games section (Epic/).
++            else if entry.epicAppName == nil, query.isEmpty || entry.title.localizedCaseInsensitiveContains(query) {
+                 result.entries[entry.id] = entry
+                 result.games.append(LibraryGrouping.Game(entry: entry, position: position))
+             }
+@@ -2419,7 +2434,7 @@ struct LibraryView: View {
+     @ObservedObject private var steamLibrary = SteamOwnedLibrary.shared
+     private var entries: [LibraryEntry] {
+         // Steam games are listed in their own section (SteamGames.swift).
+-        let visible = model.entries.filter { $0.desktop != true && $0.steamAppID == nil && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) }
++        let visible = model.entries.filter { $0.desktop != true && $0.steamAppID == nil && $0.epicAppName == nil && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) }
+         if sort == "added" { return visible.reversed() }
+         return visible.sorted {
+             if sort == "played", $0.lastPlayed != $1.lastPlayed { return ($0.lastPlayed ?? .distantPast) > ($1.lastPlayed ?? .distantPast) }
+@@ -2574,6 +2589,9 @@ struct LibraryView: View {
+                 SteamSettingsSection(open: { settingsSheet = $0 })
+             }
+             if settingsShow(".NET", "Mono", "Wine Mono", "framework", "download") { WineMonoSettingsSection() }
++            if settingsShow("Epic", "Epic Games", "sign in", "account") {
++                EpicSettingsSection(open: { settingsSheet = $0 })
++            }
+             if settingsShow("saves", "backup", "restore", "save games") { SavesSection() }
+             if settingsShow("appearance", "liquid metal", "metal", "glass") {
+                 Section {
+@@ -2624,6 +2642,7 @@ struct LibraryView: View {
+             switch sheet {
+             case .allSettings: AllSettingsView()
+             case .steamSignIn: SteamSignInView()
++            case .epicSignIn: EpicSignInView()
+             case .dock: MadeiraDockView(start: startDock)
+             }
+         }
+@@ -2698,18 +2717,23 @@ struct LibraryView: View {
+                         SteamGamesSection(search: search, layout: layout, sort: sort, width: viewport.size.width,
+                                           part: steamFirst ? .notInstalled : .all, open: { selected = $0 })
+                     }
+-                } else if model.entries.filter({ $0.desktop != true && $0.steamAppID == nil }).isEmpty {
+-                    ContentUnavailableView("Make yourself at home", systemImage: "gamecontroller", description: Text("Copy a game's folder into Madeira › wine › drive_c with the Files app, then tap + and choose its .exe."))
++                } else if model.entries.filter({ $0.desktop != true && $0.steamAppID == nil && $0.epicAppName == nil }).isEmpty {
++                    if !EpicGamesSection.shown {
++                        ContentUnavailableView("Make yourself at home", systemImage: "gamecontroller", description: Text("Copy a game's folder into Madeira › wine › drive_c with the Files app, then tap + and choose its .exe."))
++                    }
+                 } else {
+                     cells(entries, width: viewport.size.width)
+                 }
+                 }
++                // The account's Epic games, after Steam's and the games you added, under
++                // every Group by choice (Epic/).
++                EpicGamesSection(search: search, layout: layout, width: viewport.size.width, open: { selected = $0 })
+             }
+             // Ambient light behind the grid cards, in the content's own space so it scrolls with them.
+             .backgroundPreferenceValue(AmbientGlowKey.self) { AmbientGlowLayer(items: $0) }
+             .padding(16).frame(maxWidth: 1100).frame(maxWidth: .infinity)
+         }
+-        .refreshable { await SteamGamesSection.refresh() }
++        .refreshable { await SteamGamesSection.refresh(); await EpicGamesSection.refresh() }
+         .onReceive(controller.commands) { command in
+             guard tab == 0, selected == nil, !browser, !onboarding.presented else { return }
+             let items = focusOrder
+@@ -2953,6 +2977,11 @@ struct LibraryDetail: View {
+                     SteamCloudSection(appID: appID)
+                     SteamEntrySection(entry: $entry) { leaving = true; dismiss() }
+                 }
++                // An installed Epic game's version, prerequisites and Uninstall (Epic/).
++                if let epic = entry.epicAppName {
++                    EpicEntrySection(appName: epic, run: { prerequisite in leaving = true; play(prerequisite) },
++                                     leave: { leaving = true; dismiss() })
++                }
+                 Section {
+                     // The Windows screen the game renders for (and the Desktop's size).
+                     // ml1172: this device's choices (ResolutionChoices), grouped.
+@@ -3023,7 +3052,7 @@ struct LibraryDetail: View {
+                     }
+                 }
+                 // A Steam game starts with Steam's own launch option through Madeira Dock.
+-                if entry.desktop != true && entry.steamAppID == nil {
++                if entry.desktop != true && entry.steamAppID == nil && entry.epicAppName == nil {
+                     Section {
+                         TextField("Launch arguments", text: $entry.arguments, axis: .vertical)
+                             .font(.body.monospaced()).lineLimit(1...4)
+@@ -3565,7 +3594,7 @@ struct MadeiraCredit: View {
+ /// MADEIRA_RUNTIME_SETTINGS=0 hides this section.
+ /// A sheet opened from Settings; LibraryView presents it from the Form itself.
+ enum SettingsSheet: String, Identifiable {
+-    case allSettings, steamSignIn, dock
++    case allSettings, steamSignIn, epicSignIn, dock
+     var id: String { rawValue }
+ }
+ 
+diff --git a/app/Madeira/SteamDownloadBackground.swift b/app/Madeira/SteamDownloadBackground.swift
+index a537962c8d..f61b7de9b7 100644
+--- a/app/Madeira/SteamDownloadBackground.swift
++++ b/app/Madeira/SteamDownloadBackground.swift
+@@ -35,7 +35,17 @@ import UserNotifications
+     /// Local notifications when a Steam download finishes, fails or pauses while Madeira is in the background (permission asked at the first download). 0: none, and no permission request.
+     static var notificationsEnabled: Bool { SteamSignIn.flag("MADEIRA_DOWNLOAD_NOTIFICATIONS", default: true) }
+ 
++    private let source: String
++    private let suffix: String
++    private var activeDownload: (() -> Bool)?
++    private var pauseDownloads: (() -> Void)?
++    private var resumeDownloads: (() -> Void)?
+     private weak var library: SteamOwnedLibrary?
++
++    // Separate identifiers let Epic and Steam continue independently in the background.
++    init(source: String = "Steam", suffix: String = "queue") {
++        self.source = source; self.suffix = suffix
++    }
+     private var graceTask: UIBackgroundTaskIdentifier = .invalid
+     private var continued: AnyObject?            // BGContinuedProcessingTask (iOS 26+)
+     private var continuedPending = false
+@@ -57,12 +67,19 @@ import UserNotifications
+     private var taskIdentifier: String? {
+         let permitted = Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? []
+         guard let wildcard = permitted.first(where: { $0.hasSuffix(".download.*") }) else { return nil }
+-        return String(wildcard.dropLast()) + "queue"
++        return String(wildcard.dropLast()) + suffix
+     }
+ 
+     /// Called once, when the library model starts.
+     func attach(_ library: SteamOwnedLibrary) {
+         self.library = library
++        attach(active: { [weak library] in library?.hasActiveDownload == true },
++               pause: { [weak library] in library?.pauseForBackground() },
++               resume: { [weak library] in library?.resumeAfterBackground(); library?.reconcileSession() })
++    }
++
++    func attach(active: @escaping () -> Bool, pause: @escaping () -> Void, resume: @escaping () -> Void) {
++        activeDownload = active; pauseDownloads = pause; resumeDownloads = resume
+         guard !observing else { return }
+         observing = true
+         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+@@ -71,8 +88,7 @@ import UserNotifications
+         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+             MainActor.assumeIsolated {
+                 self?.endGrace()
+-                self?.library?.resumeAfterBackground()
+-                self?.library?.reconcileSession()
++                self?.resumeDownloads?()
+             }
+         }
+     }
+@@ -83,7 +99,7 @@ import UserNotifications
+         requestNotificationPermission()
+         if #available(iOS 26.0, *), Self.continuedEnabled { submitContinued() }
+         if #available(iOS 26.0, *), let task = continued as? BGContinuedProcessingTask {
+-            task.updateTitle("Downloading \(name)", subtitle: "Steam download in Madeira")
++            task.updateTitle("Downloading \(name)", subtitle: "\(source) download in Madeira")
+         }
+         if isBackground { beginGrace() }
+     }
+@@ -102,7 +118,7 @@ import UserNotifications
+     func downloadEnded(appID: Int, name: String, outcome: Outcome, queueEmpty: Bool) {
+         if isBackground {
+             switch outcome {
+-            case .completed: notify("\(name) is ready to play", body: "The Steam download finished.")
++            case .completed: notify("\(name) is ready to play", body: "The \(source) download finished.")
+             case .failed(let reason): notify("\(name) download stopped", body: reason)
+             case .paused: break
+             }
+@@ -126,7 +142,7 @@ import UserNotifications
+             registered = identifier
+         }
+         let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "Downloading \(currentName)",
+-                                                       subtitle: "Steam download in Madeira")
++                                                       subtitle: "\(source) download in Madeira")
+         request.strategy = .fail
+         do {
+             try BGTaskScheduler.shared.submit(request)
+@@ -145,13 +161,13 @@ import UserNotifications
+         task.expirationHandler = { [weak self] in
+             DispatchQueue.main.async {
+                 self?.log("continued-processing expired; pausing downloads")
+-                self?.library?.pauseForBackground()
++                self?.pauseDownloads?()
+                 self?.notify("Download paused", body: "Open Madeira to continue downloading.")
+                 self?.finishContinued(success: false)
+             }
+         }
+         log("continued-processing running")
+-        if library?.hasActiveDownload != true { finishContinued(success: true) }
++        if activeDownload?() != true { finishContinued(success: true) }
+     }
+ 
+     private func finishContinued(success: Bool) {
+@@ -165,14 +181,14 @@ import UserNotifications
+     // MARK: Short grace period (all iOS versions)
+ 
+     private func beginGrace() {
+-        guard graceTask == .invalid, continued == nil, library?.hasActiveDownload == true else { return }
+-        graceTask = UIApplication.shared.beginBackgroundTask(withName: "Madeira Steam download") { [weak self] in
++        guard graceTask == .invalid, continued == nil, activeDownload?() == true else { return }
++        graceTask = UIApplication.shared.beginBackgroundTask(withName: "Madeira \(source) download") { [weak self] in
+             MainActor.assumeIsolated {
+                 guard let self else { return }
+                 // Continued processing keeps the app running; only pause without it.
+                 if self.continued == nil {
+                     self.log("background time over; pausing downloads")
+-                    self.library?.pauseForBackground()
++                    self.pauseDownloads?()
+                     self.notify("Download paused", body: "Open Madeira to continue downloading.")
+                 }
+                 self.endGrace()
+diff --git a/app/Madeira/SteamGames.swift b/app/Madeira/SteamGames.swift
+index 969b4e786d..061860477c 100644
+--- a/app/Madeira/SteamGames.swift
++++ b/app/Madeira/SteamGames.swift
+@@ -649,7 +649,7 @@ struct SteamGameArtwork: View {
+ /// smaller radial fade: the blur ramps from the centre out to the sharp artwork
+ /// with no edge. Sizes follow the artwork's shorter side, so a list thumbnail gets
+ /// the same look as a grid card.
+-private struct SteamArtworkBlurSpot: View {
++struct SteamArtworkBlurSpot: View {
+     let image: Image
+     let size: CGSize
+     /// (blur radius, fade radius) as fractions of the shorter side, outermost first.
+diff --git a/docs/EPIC.md b/docs/EPIC.md
+new file mode 100644
+index 0000000000..182bdb3fd3
+--- /dev/null
++++ b/docs/EPIC.md
+@@ -0,0 +1,114 @@
++# Epic Games integration
++
++Native Epic Games support in Madeira, modeled on Legendary's protocol work
++(https://github.com/derrod/legendary). Milestones 1 and 2 are implemented: sign in, list owned games, install Windows
++builds and launch them directly through Wine + FEX, without the Epic launcher.
++
++## Milestone 1 — sign in + library (done)
++
++**Files** (`app/Madeira/Epic/`):
++
++- `EpicAuth.swift` — OAuth through Epic's site. The user logs in in an embedded
++  `WKWebView`; Madeira captures the `authorizationCode` from Epic's redirect
++  page (`/id/api/redirect`, JSON body) and exchanges it at
++  `account-public-service-prod03.ol.epicgames.com/account/api/oauth/token`
++  (grant `authorization_code`, HTTP Basic with Epic's public launcher client
++  credentials — the same ones Legendary uses). A manual paste fallback takes
++  the raw code or the whole JSON, like Legendary's CLI. Tokens are refreshed
++  with `grant_type=refresh_token` and kept in the Keychain
++  (`madeira.epic.tokens`); the password never touches the app.
++- `EpicAPI.swift` — owned games via
++  `library-service.live.use1a.on.epicgames.com/library/api/public/items`
++  (the endpoint Legendary's `get_library_items` uses), with cursor pagination.
++  Titles and artwork missing from the records come from Epic's catalog
++  (bulk item lookups). DLC (records with `mainGameItem`), add-ons and the `ue`
++  namespace are filtered out, and only games in the account's Windows asset list
++  (`launcher/api/public/assets/Windows`) are kept, so mobile-store copies with no
++  Windows build stay out. Artwork prefers `DieselGameBoxTall` → `DieselGameBox` →
++  `Thumbnail`; the library is cached in Application Support and refreshed when stale.
++- `EpicSignInView.swift` — the sign-in sheet (`SettingsSheet.epicSignIn`) and
++  Settings › Epic Games, after Steam's section: the account and Sign out, or Sign in.
++- `EpicLibraryViews.swift` — the library's Epic Games section after Steam's and the
++  games you added: installed and downloading games under the title, the rest under
++  Not installed, with cards in the Steam cards' style. An installed game opens its
++  Game details page; any other its install page, which shows the download and
++  installed sizes beside the free space before installing.
++
++## Milestone 2 — native installs and launch (done)
++
++- `EpicManifest.swift` requests the Windows Live build from
++  `launcher-public-service-prod06.ol.epicgames.com/launcher/api/public/assets/v2/platform/Windows/namespace/{namespace}/catalogItem/{catalogItemId}/app/{appName}/label/Live`.
++  Epic lists the manifest on several CDNs; like Legendary it tries each URI with its
++  query parameters until one answers and matches the hash, and reads binary or JSON
++  manifests. When the library's app name has no Windows asset (HTTP 404), the app
++  name from the Windows asset list is used instead. This includes metadata, prerequisites,
++  chunk GUIDs/hashes/groups/sizes, file chunk parts and custom fields. Binary
++  sections use their declared lengths; strings support ASCII and UTF-16LE.
++  JSON numbers use Legendary's three-decimal-digits-per-byte encoding.
++- `EpicChunk.swift` reads chunk headers, inflates zlib payloads and verifies
++  GUID, sizes, manifest SHA-1 and the header SHA-1 when present. Paths follow
++  the manifest feature level (`ChunksV3`, `ChunksV4`, and unencrypted `ChunksV5`).
++  Encrypted content and legacy file-data manifests fail explicitly; content
++  secrets and encrypted preloads are not implemented.
++- `EpicInstaller.swift` queues installs, downloads at most four chunks at once,
++  and writes each file's parts in manifest order. Its GUID-keyed LRU retains
++  at most 8 MiB between writes, plus up to four chunks being fetched/consumed;
++  a chunk is released immediately after its last use. Evicted chunks can be
++  downloaded again. Responses spool to temporary files rather than building a
++  whole game in RAM. Decompressed chunks are capped at 16 MiB each.
++- File SHA-1 is incremental. Only verified files are renamed into place.
++  Resume checks existing size **and** SHA-1 and skips matching files. Pause
++  keeps complete files; an unfinished file restarts. App termination leaves
++  pending installs paused for Resume, and abandoned staging data is removed
++  at the next attempt. Cancel deletes the partial install. Free space is checked
++  for remaining files plus 128 MiB working space before assembly begins.
++- Installs live under `drive_c/Program Files/Epic Games/<sanitized title>-<app hash>`.
++  The suffix keeps titles that sanitize to the same name separate. Paths that
++  escape the install directory, existing symlinks, and duplicate file names are
++  rejected. Installed build/launch/prerequisite metadata and pending jobs are
++  stored atomically in Application Support's `epic-installs.json`.
++- Epic uses the existing `SteamDownloadStatus` visuals and the same
++  `SteamDownloadBackground` implementation with its own `.download.epic`
++  identifier. iOS 26 uses continued processing when available; iOS 17–25 uses
++  the normal background grace period, then pauses and resumes on foreground.
++  Background execution remains subject to iOS scheduling and permission.
++- Finished installs get a normal `LibraryEntry` with optional `epicAppName`,
++  manifest launch command and public artwork URLs. Cards and sheets show real
++  status, Pause/Resume/Cancel, Play and confirmed Uninstall. Play opens the normal
++  details page; installed games remain visible after sign-out. Prerequisite
++  installers listed by the manifest can be opened separately from the Epic sheet.
++  Uninstall deletes the game directory (including saves stored there) and entry.
++- Immediately after JIT setup and before launch, `EpicAuth.gameArguments` calls
++  `/account/api/oauth/exchange`. The temporary launch profile appends Legendary's
++  `-AUTH_LOGIN=unused`, exchange-code password/type, `-epicapp`, `-epicenv=Prod`,
++  `-EpicPortal`, display name, account ID and `-epiclocale=en`, together with the
++  manifest launch command. The saved library profile never receives credentials.
++  Wine's argument logger redacts Epic authentication and identity values.
++  `[epic-install]` logs contain counts and sizes, never tokens or account IDs.
++
++### Validation and limits
++
++`python3 tests/host/check-epic-manifest.py` compiles the production Swift readers
++on macOS. Synthetic fixtures cover compressed and raw binary manifests, JSON,
++UTF-16 metadata, prerequisites, columnar lists, optional file metadata, chunk
++headers v1–v4, CDN paths, multi-chunk file assembly, incremental SHA-1, corruption,
++truncation and encrypted-content rejection. The same test compiles the production
++file worker with host stubs and fixture downloads to check assembly, hash-based
++resume, corrupted-file repair, persistence, path/symlink rejection, cancellation
++cleanup and uninstall. No iOS app build is needed.
++
++Live account/CDN downloads, on-device pause/background behavior, prerequisite
++execution and Wine/FEX gameplay still require device testing. Launch arguments
++do not supply EOS overlays, ownership-ticket files, third-party launchers or
++anti-cheat support; games requiring those may not run. Updates, delta manifests,
++DLC selection and cloud saves are outside this milestone.
++
++### Credits
++
++Protocol and binary/JSON layout work is ported from
++[Legendary](https://github.com/derrod/legendary), by derrod and contributors,
++licensed GPL-3.0-or-later: `legendary/api/egs.py`, `models/manifest.py`,
++`models/json_manifest.py`, `models/chunk.py`, `downloader/mp/manager.py`,
++`downloader/mp/workers.py`, and `core.py` (`get_launch_parameters`). Madeira's
++Swift port uses Apple's Foundation/URLSession and zlib, with no Python runtime
++or new package dependencies.
+diff --git a/tests/host/check-epic-manifest.py b/tests/host/check-epic-manifest.py
+new file mode 100644
+index 0000000000..18c8281111
+--- /dev/null
++++ b/tests/host/check-epic-manifest.py
+@@ -0,0 +1,308 @@
++#!/usr/bin/env python3
++"""Compile the real Epic readers on macOS and exercise Legendary's wire layouts.
++No account, CDN, iOS build, or third-party Python modules are needed.
++"""
++from pathlib import Path
++import hashlib
++import json
++import os
++import shutil
++import struct
++import subprocess
++import tempfile
++import zlib
++
++ROOT = Path(__file__).resolve().parents[2]
++SWIFTC = os.environ.get('SWIFTC') or shutil.which('swiftc')
++
++
++def u32(n):
++    return struct.pack('<I', n)
++
++
++def string(s):
++    if not s:
++        return u32(0)
++    try:
++        raw = s.encode('ascii')
++        return u32(len(raw) + 1) + raw + b'\0'
++    except UnicodeEncodeError:
++        raw = s.encode('utf-16le')
++        return struct.pack('<i', -(len(raw) // 2 + 1)) + raw + b'\0\0'
++
++
++def section(data):
++    return u32(len(data) + 4) + data
++
++
++def blob(data):
++    return ''.join(f'{b:03d}' for b in data)
++
++
++def sha(data):
++    return hashlib.sha1(data).digest()
++
++
++guids = [(0x01234567, 0x89ABCDEF, 0x10203040, 0x50607080), (1, 2, 3, 4)]
++guid_bytes = [struct.pack('<4I', *g) for g in guids]
++guid_text = [''.join(f'{v:08X}' for v in g) for g in guids]
++hashes = [0x1234567890ABCDEF, 0xFEDCBA0987654321]
++payloads = [b'Epic chunk one' + bytes(1024 * 1024 - 14), b'Another chunk' + bytes(1024 * 1024 - 13)]
++# Correct the first payload to exactly one legacy chunk window.
++payloads[0] = b'Epic chunk one'.ljust(1024 * 1024, b'\0')
++
++
++def chunk(index, version=3, compressed=True):
++    data = payloads[index]
++    wire = zlib.compress(data) if compressed else data
++    header_size = {1: 41, 2: 62, 3: 66, 4: 98}[version]
++    header = struct.pack('<4I', 0xB1FE3AA2, version, header_size, len(wire))
++    header += guid_bytes[index] + struct.pack('<Q', hashes[index]) + bytes([int(compressed)])
++    if version >= 2:
++        header += sha(data) + b'\3'
++    if version >= 3:
++        header += u32(len(data))
++    if version >= 4:
++        header += bytes(32)
++    return header + wire
++
++
++chunks = [chunk(i) for i in range(2)]
++file_data = payloads[1][2:9] + payloads[0][1:12]
++
++
++def manifest(compressed=True, feature=18):
++    meta = b'\2' + u32(feature) + b'\0' + u32(42)
++    meta += b''.join(map(string, ['TestApp', '1.2.3', 'Bín/Game.exe', '-test']))
++    meta += u32(1) + string('prereq-id')
++    meta += b''.join(map(string, ['VC Runtime', 'Redist/setup.exe', '/quiet', 'build-id', '', '']))
++    cdl = b'\0' + u32(2) + b''.join(guid_bytes)
++    cdl += b''.join(struct.pack('<Q', v) for v in hashes)
++    cdl += b''.join(map(sha, payloads)) + bytes([7, 42])
++    cdl += u32(len(payloads[0])) + u32(len(payloads[1]))
++    cdl += b''.join(struct.pack('<q', len(c)) for c in chunks)
++    if feature >= 22:
++        cdl += bytes(32) + u32(10) + u32(20) + bytes(32)
++    fml = b'\2' + u32(2)
++    fml += string('Bín/Game.exe') + string('empty.txt')
++    fml += string('') + string('') + sha(file_data) + sha(b'') + b'\4\0'
++    fml += u32(1) + string('optional-tag') + u32(0)
++    fml += u32(2) + section(guid_bytes[1] + u32(2) + u32(7)) + section(guid_bytes[0] + u32(1) + u32(11))
++    fml += u32(0) + u32(1) + hashlib.md5(file_data).digest() + u32(0)
++    fml += string('application/octet-stream') + string('text/plain') + hashlib.sha256(file_data).digest() + hashlib.sha256(b'').digest()
++    fields = b'\0' + u32(2) + string('InstallLocation') + string('hello') + string('Example') + string('world')
++    body = section(meta) + section(cdl) + section(fml) + section(fields)
++    wire = zlib.compress(body) if compressed else body
++    header_size = 73 if feature >= 22 else 41
++    header = struct.pack('<4I', 0x44BEC00C, header_size, len(body), len(wire)) + sha(body) + bytes([compressed]) + u32(feature)
++    if feature >= 22:
++        header += bytes(32)
++    return header + wire
++
++
++legacy = {
++    'ManifestFileVersion': blob(u32(13)), 'bIsFileData': False,
++    'AppNameString': 'TestApp', 'BuildVersionString': '1.2.3', 'LaunchExeString': 'Bín/Game.exe',
++    'LaunchCommand': '-test', 'PrereqIds': ['prereq-id'], 'PrereqName': 'VC Runtime',
++    'PrereqPath': 'Redist/setup.exe', 'PrereqArgs': '/quiet',
++    'ChunkFilesizeList': {g: blob(struct.pack('<Q', len(c))) for g, c in zip(guid_text, chunks)},
++    'ChunkHashList': {g: blob(struct.pack('<Q', h)) for g, h in zip(guid_text, hashes)},
++    'ChunkShaList': {g: sha(p).hex() for g, p in zip(guid_text, payloads)},
++    'DataGroupList': {g: blob(bytes([n])) for g, n in zip(guid_text, [7, 42])},
++    'FileManifestList': [{'Filename': 'Bín/Game.exe', 'FileHash': blob(sha(file_data)),
++                          'bIsUnixExecutable': True, 'InstallTags': ['optional-tag'], 'FileChunkParts': [
++                              {'Guid': guid_text[1], 'Offset': blob(u32(2)), 'Size': blob(u32(7))},
++                              {'Guid': guid_text[0], 'Offset': blob(u32(1)), 'Size': blob(u32(11))}]}],
++    'CustomFields': {'InstallLocation': 'Example', 'hello': 'world'},
++}
++
++MAIN = r'''
++import Foundation
++let folder = URL(fileURLWithPath: CommandLine.arguments[1])
++func read(_ name: String) throws -> Data { try Data(contentsOf: folder.appendingPathComponent(name)) }
++var failures = 0
++func check(_ condition: Bool, _ label: String) {
++    print((condition ? "PASS: " : "FAIL: ") + label)
++    if !condition { failures += 1 }
++}
++func rejects(_ label: String, _ operation: () throws -> Void) {
++    do { try operation(); check(false, label) } catch { check(true, label) }
++}
++let expected = try read("file.bin")
++let binary = try EpicManifest.parse(read("manifest.bin"))
++for name in ["manifest.bin", "raw.bin", "legacy.json", "v5.bin"] {
++    let m = try EpicManifest.parse(read(name))
++    check(m.meta.appName == "TestApp" && m.meta.buildVersion == "1.2.3" && m.meta.launchExe == "Bín/Game.exe" && m.meta.launchCommand == "-test", name + " metadata / UTF-16")
++    check(m.meta.prereqIDs == ["prereq-id"] && m.meta.prereqPath == "Redist/setup.exe" && m.meta.prereqArgs == "/quiet", name + " prerequisites")
++    check(m.chunks.count == 2 && m.chunks.first(where: { $0.group == 7 })?.hash == 0x1234567890ABCDEF && m.chunks.first(where: { $0.group == 42 })?.hash == 0xFEDCBA0987654321, name + " columnar chunks")
++    check(m.files[0].parts.count == 2 && m.files[0].size == 18 && m.files[0].flags == 4 && m.files[0].tags == ["optional-tag"], name + " file parts / tags")
++    check(m.customFields == ["InstallLocation": "Example", "hello": "world"], name + " custom fields / section boundaries")
++    var assembled = Data()
++    for part in m.files[0].parts {
++        let i = binary.chunks.firstIndex { $0.guid == part.guid }!
++        let data = try EpicChunk.parse(read("chunk\(i).bin"), expected: m.chunks.first { $0.guid == part.guid }!)
++        assembled.append(data.subdata(in: part.offset..<part.offset + part.size))
++    }
++    check(assembled == expected && EpicSHA1.hash(assembled) == m.files[0].sha, name + " verified chunk assembly")
++}
++check(try binary.chunks[0].path(featureLevel: 18) == "ChunksV4/07/1234567890ABCDEF_0123456789ABCDEF1020304050607080.chunk", "ChunksV4 URL")
++check(try binary.chunks[0].path(featureLevel: 13).hasPrefix("ChunksV3/07/"), "ChunksV3 URL")
++check(try binary.chunks[0].path(featureLevel: 22) == "ChunksV5/plain/07/782rkHhWNBI_Z0UjAe_Nq4lAMCAQgHBgUA.chunk", "ChunksV5 plain URL")
++for version in 1...4 {
++    for compressed in [false, true] {
++        var expectedChunk = binary.chunks[0]
++        let data = try read("v\(version)-\(compressed).chunk")
++        expectedChunk.fileSize = data.count
++        check(try EpicChunk.parse(data, expected: expectedChunk) == read("payload.bin"), "chunk header v\(version), compressed=\(compressed)")
++    }
++}
++var hash = EpicSHA1()
++for byte in expected { hash.update(Data([byte])) }
++check(hash.finish() == EpicSHA1.hash(expected), "incremental SHA-1")
++check(try EpicSHA1.file(folder.appendingPathComponent("payload.bin")) == EpicSHA1.hash(read("payload.bin")), "streamed file SHA-1")
++check(EpicSHA1.hash(Data()).map { String(format: "%02x", $0) }.joined() == "da39a3ee5e6b4b0d3255bfef95601890afd80709", "SHA-1 empty known vector")
++var damaged = try read("manifest.bin"); damaged[16] ^= 1
++rejects("manifest hash mismatch") { _ = try EpicManifest.parse(damaged) }
++var badChunk = try read("chunk0.bin"); badChunk[41] ^= 1
++rejects("chunk hash mismatch") { _ = try EpicChunk.parse(badChunk) }
++var encrypted = try read("manifest.bin"); encrypted[36] = 3
++rejects("encrypted manifest fails explicitly") { _ = try EpicManifest.parse(encrypted) }
++var wrong = binary.chunks[0]; wrong.guid = String(repeating: "0", count: 32)
++rejects("chunk GUID mismatch") { _ = try EpicChunk.parse(read("chunk0.bin"), expected: wrong) }
++let bytes = try read("raw.bin")
++var truncatedAccepted = 0
++for size in 0..<bytes.count {
++    do { _ = try EpicManifest.parse(Data(bytes.prefix(size))); truncatedAccepted += 1 } catch {}
++}
++check(truncatedAccepted == 0, "every truncated binary prefix rejected without a crash")
++var badJSON = try JSONSerialization.jsonObject(with: read("legacy.json")) as! [String: Any]
++badJSON["ChunkHashList"] = [binary.chunks[0].guid: "999"]
++rejects("malformed JSON byte blob") { _ = try EpicManifest.parse(JSONSerialization.data(withJSONObject: badJSON)) }
++exit(failures == 0 ? 0 : 1)
++'''
++
++
++ASSEMBLY = r'''
++import Foundation
++struct SteamDownloadProgress: Sendable {
++    enum Phase { case preparing, downloading, finishing }
++    var phase: Phase = .preparing
++    var totalBytes: UInt64 = 0, doneBytes: UInt64 = 0
++    var bytesPerSecond: Double = 0
++}
++final class LogStore: @unchecked Sendable {
++    static let shared = LogStore()
++    func log(_ line: String) { print(line) }
++}
++actor FetchCount {
++    var count = 0
++    func increment() { count += 1 }
++    func reset() { count = 0 }
++}
++'''
++ASSEMBLY_MAIN = r'''
++let fixtures = URL(fileURLWithPath: CommandLine.arguments[1])
++let drive = fixtures.appendingPathComponent("drive_c")
++let support = fixtures.appendingPathComponent("support")
++private let worker = EpicInstallWorker(drive: drive, support: support)
++let game = EpicGame(appName: "TestApp", title: "Test Game", namespace: "test", catalogItemId: "catalog")
++let job = EpicInstaller.Pending(game: game, installDir: "Program Files/Epic Games/Test Game-test")
++let manifest = try EpicManifest.parse(Data(contentsOf: fixtures.appendingPathComponent("manifest.bin")))
++let root = drive.appendingPathComponent(job.installDir)
++let target = root.appendingPathComponent("Bín/Game.exe")
++let expected = try Data(contentsOf: fixtures.appendingPathComponent("file.bin"))
++let count = FetchCount()
++let fetch: @Sendable (URL, EpicManifest.Chunk) async throws -> Data = { url, chunk in
++    await count.increment()
++    let index = manifest.chunks.firstIndex { $0.guid == chunk.guid }!
++    return try Data(contentsOf: fixtures.appendingPathComponent("chunk\(index).bin"))
++}
++let base = URL(string: "https://example.invalid/game")!
++var failures = 0
++func check(_ ok: Bool, _ label: String) {
++    print((ok ? "PASS: " : "FAIL: ") + label)
++    if !ok { failures += 1 }
++}
++let record = try await worker.assemble(job, manifest: manifest, base: base, fetch: { try await fetch($0, $1) }, progress: { _ in })
++check(try Data(contentsOf: target) == expected, "installer assembles a verified file in manifest part order")
++check(await count.count == 2, "installer fetches two chunks")
++check(record.launchExe == "Bín/Game.exe" && record.launchCommand == "-test" && record.prereqPath == "Redist/setup.exe", "installer preserves launch and prerequisite metadata")
++check(try Data(contentsOf: root.appendingPathComponent("empty.txt")).isEmpty, "installer creates verified empty files")
++await count.reset()
++_ = try await worker.assemble(job, manifest: manifest, base: base, fetch: { try await fetch($0, $1) }, progress: { _ in })
++check(await count.count == 0, "resume hashes matching files and fetches nothing")
++var corrupt = expected; corrupt[0] ^= 1
++try corrupt.write(to: target)
++_ = try await worker.assemble(job, manifest: manifest, base: base, fetch: { try await fetch($0, $1) }, progress: { _ in })
++check(try await count.count == 2 && Data(contentsOf: target) == expected, "resume repairs same-size hash mismatches")
++try await worker.save(EpicInstaller.Store(installed: [game.appName: record], pending: [:]))
++check(try await worker.load().installed[game.appName]?.buildVersion == "1.2.3", "installed metadata round-trips through atomic JSON")
++var invalid = manifest
++invalid.files[0].sha = Data(repeating: 0, count: 20)
++do {
++    _ = try await worker.assemble(job, manifest: invalid, base: base, fetch: { try await fetch($0, $1) }, progress: { _ in })
++    check(false, "file hash mismatch rejected")
++} catch { check(true, "file hash mismatch rejected") }
++check(try Data(contentsOf: target) == expected, "failed replacement preserves the prior file")
++var traversal = manifest
++traversal.files.append(EpicManifest.File(filename: "../escape", sha: EpicSHA1.hash(Data())))
++do {
++    _ = try await worker.assemble(job, manifest: traversal, base: base, fetch: { try await fetch($0, $1) }, progress: { _ in })
++    check(false, "path traversal rejected")
++} catch { check(true, "path traversal rejected") }
++var duplicate = manifest
++duplicate.files.append(manifest.files[0])
++do {
++    _ = try await worker.assemble(job, manifest: duplicate, base: base, fetch: { try await fetch($0, $1) }, progress: { _ in })
++    check(false, "duplicate file path rejected")
++} catch { check(true, "duplicate file path rejected") }
++let outside = fixtures.appendingPathComponent("outside")
++try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
++try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("linked"), withDestinationURL: outside)
++var linked = manifest
++linked.files.append(EpicManifest.File(filename: "linked/escape", sha: EpicSHA1.hash(Data())))
++do {
++    _ = try await worker.assemble(job, manifest: linked, base: base, fetch: { try await fetch($0, $1) }, progress: { _ in })
++    check(false, "existing symlink rejected")
++} catch { check(true, "existing symlink rejected") }
++try FileManager.default.removeItem(at: target)
++do {
++    _ = try await worker.assemble(job, manifest: manifest, base: base,
++                                 fetch: { _, _ in throw CancellationError() }, progress: { _ in })
++    check(false, "interrupted chunk propagates cancellation")
++} catch is CancellationError { check(true, "interrupted chunk propagates cancellation") }
++check(!FileManager.default.fileExists(atPath: target.path), "interruption never publishes a partial file")
++let staged = try FileManager.default.contentsOfDirectory(at: support.appendingPathComponent("Epic Staging"), includingPropertiesForKeys: nil)
++check(staged.isEmpty, "failure and cancellation clean up staging")
++_ = try await worker.assemble(job, manifest: manifest, base: base, fetch: { try await fetch($0, $1) }, progress: { _ in })
++try await worker.remove(job.installDir)
++check(!FileManager.default.fileExists(atPath: root.path) && FileManager.default.fileExists(atPath: outside.path), "uninstall removes only the managed game folder")
++exit(failures == 0 ? 0 : 1)
++'''
++
++with tempfile.TemporaryDirectory(prefix='madeira-epic-') as directory:
++    folder = Path(directory)
++    for name, data in [('manifest.bin', manifest()), ('raw.bin', manifest(False)), ('v5.bin', manifest(feature=22)),
++                       ('legacy.json', json.dumps(legacy).encode()), ('file.bin', file_data), ('payload.bin', payloads[0])]:
++        (folder / name).write_bytes(data)
++    for i, data in enumerate(chunks):
++        (folder / f'chunk{i}.bin').write_bytes(data)
++    for version in range(1, 5):
++        for compressed in [False, True]:
++            (folder / f'v{version}-{str(compressed).lower()}.chunk').write_bytes(chunk(0, version, compressed))
++    (folder / 'main.swift').write_text(MAIN)
++    sources = [ROOT / 'app/Madeira/Epic' / f'{name}.swift' for name in ['EpicManifest', 'EpicChunk']]
++    subprocess.run([SWIFTC, '-O', '-module-cache-path', str(folder / 'cache'), *map(str, sources),
++                    str(folder / 'main.swift'), '-o', str(folder / 'check')], check=True)
++    subprocess.run([str(folder / 'check'), str(folder)], check=True)
++    installer = (ROOT / 'app/Madeira/Epic/EpicInstaller.swift').read_text()
++    api = (ROOT / 'app/Madeira/Epic/EpicAPI.swift').read_text()
++    game = api[api.index('struct EpicGame:'):api.index('private struct EpicLibraryResponse:')]
++    record = installer[installer.index('struct EpicInstalledGame:'):installer.index('@MainActor final class EpicInstaller:')]
++    store = installer[installer.index('    struct Pending:'):installer.index('    @Published private(set) var installs:')]
++    worker = installer[installer.index('private actor EpicInstallWorker {'):]
++    (folder / 'main.swift').write_text(ASSEMBLY + game + record + 'enum EpicInstaller {\n' + store + '}\n' + worker + ASSEMBLY_MAIN)
++    subprocess.run([SWIFTC, '-O', '-module-cache-path', str(folder / 'cache'), *map(str, sources),
++                    str(folder / 'main.swift'), '-o', str(folder / 'assembly')], check=True)
++    subprocess.run([str(folder / 'assembly'), str(folder)], check=True)
++print('ALL PASS')

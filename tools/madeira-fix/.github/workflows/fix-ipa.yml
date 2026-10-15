@@ -1,0 +1,92 @@
+name: Fix Madeira IPA
+
+# Builds the fixed IPA for a Madeira release on a free GitHub Linux runner.
+# Put the contents of tools/madeira-fix in the root of your own PUBLIC repository
+# (standard runners cost nothing there; in a private repository Linux minutes
+# come out of the free 2,000 a month), then run it from the Actions tab.
+#
+#   - run by hand with a version, or leave it blank for the latest release
+#   - checks every day for a new upstream release and builds it by itself
+#   - result: a workflow artifact, and with "publish" a release in your repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Madeira release to fix, e.g. 0.1.3 (blank = latest)"
+        required: false
+        default: ""
+      modules:
+        description: "Wine modules to build into arm64ec-windows"
+        required: false
+        default: "tbs"
+      publish:
+        description: "Also publish the IPA as a release of this repository"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 5 * * *"
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM: willfaust/Madeira
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick the release
+        id: pick
+        run: |
+          v="${{ github.event.inputs.version }}"
+          if [ -z "$v" ]; then v="$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)"; fi
+          v="${v#v}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          # A scheduled run only builds releases this repository has not built yet.
+          if [ "${{ github.event_name }}" = schedule ] && gh release view "fixed-$v" >/dev/null 2>&1; then
+            echo "skip=1" >> "$GITHUB_OUTPUT"; echo "fixed-$v already exists"
+          fi
+
+      - name: Build tools
+        if: steps.pick.outputs.skip != '1'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bison flex python3 xz-utils
+
+      - name: Cache the cross compiler
+        if: steps.pick.outputs.skip != '1'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/madeira-fix/llvm-mingw-*.tar.xz
+          key: llvm-mingw-20260421-${{ runner.arch }}
+
+      - name: Fix the IPA
+        if: steps.pick.outputs.skip != '1'
+        run: |
+          bash madeira-fix.sh --version "${{ steps.pick.outputs.version }}" \
+            --modules "${{ github.event.inputs.modules || 'tbs' }}" \
+            --out "$PWD/Madeira-${{ steps.pick.outputs.version }}-fixed.ipa"
+          sha256sum Madeira-*-fixed.ipa | tee Madeira-${{ steps.pick.outputs.version }}-fixed.ipa.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: steps.pick.outputs.skip != '1'
+        with:
+          name: Madeira-${{ steps.pick.outputs.version }}-fixed
+          path: Madeira-*-fixed.ipa*
+          retention-days: 30
+
+      - name: Publish a release
+        if: steps.pick.outputs.skip != '1' && (github.event.inputs.publish == 'true' || github.event_name == 'schedule')
+        run: |
+          v="${{ steps.pick.outputs.version }}"
+          gh release create "fixed-$v" Madeira-"$v"-fixed.ipa Madeira-"$v"-fixed.ipa.sha256 \
+            --title "Madeira $v with the Windows-side fixes" \
+            --notes "Official Madeira $v IPA from $UPSTREAM with the Windows-side fixes of tools/madeira-fix swapped in. Source: that release plus the patches in patches/ of this repository. Unsigned by me: your sideloader signs it."

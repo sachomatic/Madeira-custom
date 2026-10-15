@@ -235,6 +235,9 @@ COLLISIONS=(
     # every process hung in server_init_process() the moment a client
     # connected -- guest ntdll init is exactly when the pointer was stolen.
     user_shared_data
+    # The server and the client (ntdll-unix server_ios.c) define the same globals; in stock Wine
+    # they live in different processes. Single-process link: rename the server-side ones.
+    supported_machines supported_machines_count native_machine server_start_time
 )
 RENAME_ARGS=()
 for s in "${COLLISIONS[@]}"; do

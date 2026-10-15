@@ -545,6 +545,20 @@ final class MetalBackedView: UIView {
     private func activeTouches(_ event: UIEvent?) -> [UITouch] {
         (event?.allTouches ?? []).filter { $0.phase != .ended && $0.phase != .cancelled }
     }
+    /// A long-press drag holds the left button until ITS finger lifts. If that finger's
+    /// end never reaches this view (a gate or the two-finger path consumed it), the drag
+    /// would stay armed for good: the button stays down and touchesMoved ignores every
+    /// other finger, so the pointer is dead (seen in a Frostpunk log: 25 "non-drag finger
+    /// up (drag continues)" and no "drag drop"). So a drag whose finger is gone is dropped
+    /// here, on the next touch event of any kind.
+    private func releaseStaleDrag(_ event: UIEvent?) {
+        guard dragActive else { return }
+        if let d = dragTouch, activeTouches(event).contains(d) { return }
+        fputs("[trackpad] stale drag released (its finger is gone)\n", stderr)
+        postPointer(F_LUP)
+        dragActive = false
+        dragTouch = nil
+    }
 
     // Direct touches that began while TouchMouseGate was suppressing stay
     // swallowed until they lift, so a change of the gate never leaves a button held.
@@ -581,6 +595,7 @@ final class MetalBackedView: UIView {
             return
         }
         let now = Date().timeIntervalSinceReferenceDate
+        releaseStaleDrag(event)
         let active = activeTouches(event)
         touchGeneration += 1
         if active.count >= 2 {
@@ -627,6 +642,7 @@ final class MetalBackedView: UIView {
             winios_post_touch_move(x, y)
             return
         }
+        releaseStaleDrag(event)
         let active = activeTouches(event)
         if twoFingerActive {
             guard active.count >= 2 else { return }
@@ -718,13 +734,15 @@ final class MetalBackedView: UIView {
                     postPointer(F_RUP)
                 }
                 twoFingerActive = false
+                releaseStaleDrag(event)   // every finger is up: no drag can still be held
             }
             return
         }
         touchGeneration += 1   // cancel any pending long-press
         if dragActive {
             if let d = dragTouch, !touches.contains(d) {
-                fputs("[trackpad] ended: non-drag finger up (drag continues)\n", stderr)
+                releaseStaleDrag(event)
+                if dragActive { fputs("[trackpad] ended: non-drag finger up (drag continues)\n", stderr) }
                 return
             }
             fputs("[trackpad] ended: drag drop\n", stderr)
@@ -2160,6 +2178,7 @@ struct ContentView: View {
         .sheet(item: $devSheet) { sheet in
             switch sheet {
             case .steamSignIn: SteamSignInView()
+            case .epicSignIn: EpicSignInView()
             case .dock: MadeiraDockView { startDock($0, compactPool: $1) }
             case .allSettings: AllSettingsView()
             }
@@ -2558,7 +2577,25 @@ struct ContentView: View {
     }
 
     /// The rest of Play, with JIT on: checks the entry's launch profile and starts it.
-    private func startLibraryEntry(_ entry: LibraryEntry) {
+    private func startLibraryEntry(_ entry: LibraryEntry, epicArguments: String? = nil) {
+        if let appName = entry.epicAppName, epicArguments == nil {
+            // Fetch after JIT setup so the short-lived exchange code is fresh when Wine starts.
+            Task {
+                do {
+                    let arguments = try await EpicAuth.shared.gameArguments(appName: appName)
+                    guard library.current == nil, wine_process_is_running() == 0, wineserver_is_running() == 0 else { return }
+                    startLibraryEntry(entry, epicArguments: arguments)
+                } catch { library.error = (error as? EpicAuthError)?.message ?? error.localizedDescription }
+            }
+            return
+        }
+        // The library keeps the entry without this run's exchange code.
+        let savedEntry = entry
+        var entry = entry
+        if let epicArguments, let appName = entry.epicAppName {
+            let command = entry.epicLaunchCommand ?? EpicInstaller.shared.installed[appName]?.launchCommand ?? ""
+            entry.arguments = [command, entry.arguments, epicArguments].filter { !$0.isEmpty }.joined(separator: " ")
+        }
         do { if entry.desktop != true { _ = try LibraryModel.executable(entry.launchRelativePath) }; try entry.validate() }
         catch {
             library.error = error.localizedDescription
@@ -2579,7 +2616,7 @@ struct ContentView: View {
         let program = entry.desktop == true ? "explorer.exe"
             : entry.launchWindowsPath.split(separator: "\\").last.map(String.init) ?? entry.launchWindowsPath
         LogStore.shared.startSessionLog(program: program)
-        library.begin(entry)
+        library.begin(savedEntry)
         runWineFullSequence(profile: entry)
     }
 
@@ -3754,6 +3791,8 @@ enum ControlAction: Codable, Equatable, Hashable {
     case key(Int32)          // Windows virtual-key code
     case mouseLeft
     case mouseRight
+    case wheelUp             // one mouse-wheel notch away from the user (+120), repeating while held
+    case wheelDown           // one notch toward the user (-120), repeating while held
     case joystickWASD        // renders as a stick, posts W/A/S/D
     case joystickArrows      // renders as a stick, posts the arrow keys
     case keyboardToggle      // raises the iOS keyboard, as in portrait
@@ -3776,6 +3815,14 @@ enum ControlAction: Codable, Equatable, Hashable {
         case .joystickWASD:   return "keyboard"
         case .joystickArrows: return "arrow.up.and.down.and.arrow.left.and.right"
         default:              return nil
+        }
+    }
+    /// MOUSEEVENTF_WHEEL delta of one notch for the wheel actions, nil otherwise.
+    var wheelDelta: Int32? {
+        switch self {
+        case .wheelUp:   return 120
+        case .wheelDown: return -120
+        default:         return nil
         }
     }
     var isPad: Bool { if case .pad = self { return true }; return false }
@@ -3835,6 +3882,8 @@ enum ControlAction: Codable, Equatable, Hashable {
         case .none:            return "—"
         case .mouseLeft:       return "L"
         case .mouseRight:      return "R"
+        case .wheelUp:         return "Whl↑"   // not "W↑": that reads as the W key
+        case .wheelDown:       return "Whl↓"
         case .keyboardToggle:  return "⌨"
         case .joystickWASD:    return "WASD"
         case .joystickArrows:  return "↕"
@@ -4289,6 +4338,9 @@ struct TouchControlButton: View {
     @State private var dragBase: CGPoint?
     @State private var stickDir: Int = -1
     @State private var padVector = CGSize.zero
+    /// Wheel buttons: one notch on the press, then a notch every 0.1 s after a
+    /// 0.4 s hold. Stopped on release, edit, removal and backgrounding.
+    @State private var wheelRepeat: Timer?
 
     private var diameter: CGFloat { TouchControlsModel.diameter(control) }
     private var size: CGSize { TouchControlsModel.size(control) }
@@ -4421,8 +4473,12 @@ struct TouchControlButton: View {
                 }
             }
         }
-        .onDisappear { if control.action.isPad { padVector = .zero; isDown = false } }
-        .onChange(of: m.editing) { _, _ in if control.action.isPad { padVector = .zero; isDown = false } }
+        .onDisappear { if control.action.isPad { padVector = .zero; isDown = false }; stopWheel() }
+        .onChange(of: m.editing) { _, _ in if control.action.isPad { padVector = .zero; isDown = false }; stopWheel() }
+        // A wheel button never keeps scrolling while the app is not in front.
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            stopWheel()
+        }
         .onChange(of: screen) { _, _ in if control.action.isPad { padVector = .zero; isDown = false } }
         .onChange(of: control.action) { old, new in
             if old.isPad || new.isPad { padVector = .zero; isDown = false }
@@ -4507,6 +4563,16 @@ struct TouchControlButton: View {
             winios_pointer(0, 0, down ? 0x0002 : 0x0004, 0)   // LEFTDOWN / LEFTUP
         case .mouseRight:
             winios_pointer(0, 0, down ? 0x0008 : 0x0010, 0)   // RIGHTDOWN / RIGHTUP
+        case .wheelUp, .wheelDown:
+            stopWheel()
+            guard down, let delta = control.action.wheelDelta else { break }
+            winios_pointer(0, 0, 0x0800, UInt32(bitPattern: delta))   // MOUSEEVENTF_WHEEL
+            wheelRepeat = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { _ in
+                wheelRepeat = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+                    guard isDown, !m.editing else { timer.invalidate(); return }
+                    winios_pointer(0, 0, 0x0800, UInt32(bitPattern: delta))
+                }
+            }
         case .keyboardToggle:
             if down { MetalBackedView.toggleKeyboard() }
         case .none, .joystickWASD, .joystickArrows:
@@ -4514,6 +4580,11 @@ struct TouchControlButton: View {
         case .pad:
             break     // TouchPadSurface owns pad presses and cancellation.
         }
+    }
+
+    private func stopWheel() {
+        wheelRepeat?.invalidate()
+        wheelRepeat = nil
     }
 }
 
@@ -4533,8 +4604,11 @@ struct MappingPanel: View {
             }
             Rectangle().fill(.white.opacity(0.15)).frame(height: 1)
             ScrollView {
-                (tab == 0 ? AnyView(keyboardTab) : AnyView(controllerTab))
-                    .padding(10)
+                VStack(alignment: .leading, spacing: 12) {
+                    sizeRow
+                    tab == 0 ? AnyView(keyboardTab) : AnyView(controllerTab)
+                }
+                .padding(10)
             }
         }
         .frame(width: layout.size.width, height: layout.size.height)
@@ -4592,6 +4666,25 @@ struct MappingPanel: View {
             size: size)
     }
 
+    /// The control's own size, the same value the edit-mode pinch changes
+    /// (TouchControl.scale, 50-300 %), for a pinch that is hard to find or to
+    /// make precise. The layout's Control size multiplies it.
+    private var sizeRow: some View {
+        let scale = m.controls.first { $0.id == control.id }?.scale ?? control.scale
+        return HStack(spacing: 8) {
+            Text("Size")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.45))
+            Slider(value: Binding(get: { scale },
+                                  set: { v in if let i = m.index(of: control.id) { m.controls[i].scale = (v * 20).rounded() / 20 } }),
+                   in: 0.5...3.0)
+            Text("\(Int((scale * 100).rounded())) %")
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.75))
+                .frame(width: 44, alignment: .trailing)
+        }
+    }
+
     private func tabButton(_ i: Int, _ icon: String) -> some View {
         Button { tab = i } label: {
             Image(systemName: icon)                       // stroke, not filled
@@ -4625,6 +4718,7 @@ struct MappingPanel: View {
             }
             section("Pointer, sticks & special", [
                 ("L click", .mouseLeft), ("R click", .mouseRight),
+                ("Wheel ↑", .wheelUp), ("Wheel ↓", .wheelDown),
                 ("WASD", .joystickWASD), ("Arrows", .joystickArrows),
                 ("Keyboard", .keyboardToggle), ("None", .none),
             ])

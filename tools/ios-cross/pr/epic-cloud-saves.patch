@@ -1,0 +1,1503 @@
+diff -ruN a/app/Madeira/Epic/EpicAuth.swift b/app/Madeira/Epic/EpicAuth.swift
+--- a/app/Madeira/Epic/EpicAuth.swift	2026-10-15 18:57:18.048884243 +0200
++++ b/app/Madeira/Epic/EpicAuth.swift	2026-10-15 18:57:18.160391592 +0200
+@@ -49,6 +49,8 @@
+     private let store = EpicTokenStore()
+ 
+     var signedIn: Bool { accountName != nil }
++    /// The signed-in account's ID (for Epic Cloud saves).
++    var accountID: String? { store.loadTokens()?.accountID }
+ 
+     /// The saved login is read at start, so the library shows the account's games
+     /// without visiting Settings first.
+diff -ruN a/app/Madeira/Epic/EpicCloud.swift b/app/Madeira/Epic/EpicCloud.swift
+--- a/app/Madeira/Epic/EpicCloud.swift	1970-01-01 01:00:00.000000000 +0100
++++ b/app/Madeira/Epic/EpicCloud.swift	2026-10-15 18:57:18.145523945 +0200
+@@ -0,0 +1,409 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Madeira Converter Exception: see LICENSE-EXCEPTION.md
++//
++// Epic Cloud saves in the app: when the sync runs, what it shows on a game's page, and the
++// switches. The protocol and the decision are in EpicCloudSaves.swift (tests/host/check-epic-cloud.py
++// checks them against Legendary). docs/EPIC.md, "Cloud saves".
++
++import SwiftUI
++
++/// Settings › Epic Games: whether saves sync, and whether this device's newer saves are sent
++/// without being asked. `env.MADEIRA_EPIC_CLOUD = 0` turns the sync off; downloads and the
++/// comparison are on by default, uploading is not (`env.MADEIRA_EPIC_CLOUD_AUTO_UPLOAD = 1`).
++@MainActor final class EpicCloudSetting: ObservableObject {
++    static let shared = EpicCloudSetting()
++    @Published var on = MadeiraConfig.flag("MADEIRA_EPIC_CLOUD", fallback: true) {
++        didSet {
++            guard on != oldValue else { return }
++            MadeiraConfig.set("env.MADEIRA_EPIC_CLOUD", on ? nil : "0")
++            LogStore.shared.log("[epic-cloud] setting on=\(on ? 1 : 0)")
++            if on { EpicCloud.shared.startupCheck() }
++        }
++    }
++    @Published var autoUpload = MadeiraConfig.flag("MADEIRA_EPIC_CLOUD_AUTO_UPLOAD", fallback: false) {
++        didSet {
++            guard autoUpload != oldValue else { return }
++            MadeiraConfig.set("env.MADEIRA_EPIC_CLOUD_AUTO_UPLOAD", autoUpload ? "1" : nil)
++            LogStore.shared.log("[epic-cloud] setting auto-upload=\(autoUpload ? 1 : 0)")
++        }
++    }
++}
++
++@MainActor final class EpicCloud: ObservableObject {
++    static let shared = EpicCloud()
++
++    enum Phase: Equatable {
++        case idle, checking, downloading, uploading, ready
++        case unsupported            // the game has no cloud saves
++        case failed(String)
++    }
++    struct State {
++        var phase = Phase.idle
++        var verdict: EpicSaveVerdict?
++        var deviceFiles = 0, cloudFiles = 0
++        var deviceDate: Date?, cloudDate: Date?
++        var deviceBytes: UInt64 = 0, cloudBytes: UInt64 = 0
++        var note: String?
++    }
++    @Published private(set) var states: [String: State] = [:]
++    private var busy = Set<String>()
++
++    // What is remembered between runs: the game's save folder rule and the last state both sides agreed on.
++    private struct Record: Codable {
++        var config: EpicSaveConfig?
++        var noCloud = false
++        var baseline: EpicSaveBaseline?
++    }
++    private var records: [String: Record] = {
++        guard let data = try? Data(contentsOf: EpicCloud.storeURL),
++              let value = try? JSONDecoder().decode([String: Record].self, from: data) else { return [:] }
++        return value
++    }()
++    private static var storeURL: URL {
++        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("epic-cloud-sync.json")
++    }
++    private func persist() {
++        guard let data = try? JSONEncoder().encode(records) else { return }
++        try? FileManager.default.createDirectory(at: Self.storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
++        try? data.write(to: Self.storeURL, options: .atomic)
++    }
++
++    static var enabled: Bool { EpicCloudSetting.shared.on }
++    func state(_ app: String) -> State { states[app] ?? State() }
++    private func update(_ app: String, _ change: (inout State) -> Void) {
++        var s = states[app] ?? State()
++        change(&s)
++        states[app] = s
++    }
++    private func log(_ text: String) { LogStore.shared.log("[epic-cloud] " + text) }
++
++    /// Copies of the saves a download replaced, where the Files app shows them
++    /// (Madeira › Epic Cloud Backups): `<game> (<app>)/<time>/...`.
++    static var backupsFolder: URL {
++        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Epic Cloud Backups", isDirectory: true)
++    }
++    private static func backup(for record: EpicInstalledGame) -> URL {
++        let safe = String(record.game.title.map { "/\\:*?\"<>|".contains($0) ? "-" : $0 }.prefix(80))
++            .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
++        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
++        return backupsFolder.appendingPathComponent(safe.isEmpty ? record.appName : "\(safe) (\(record.appName))", isDirectory: true)
++            .appendingPathComponent(stamp, isDirectory: true)
++    }
++
++    // MARK: what a run needs
++
++    private struct Context {
++        var record: EpicInstalledGame
++        var config: EpicSaveConfig
++        var folder: URL
++        var account: String
++        var transport: EpicCloudHTTP
++    }
++    private struct Looked {
++        var context: Context
++        var device: [EpicDeviceSave]
++        var latest: (snapshot: EpicCloudSnapshot, all: [EpicCloudObject])?
++        var verdict: EpicSaveVerdict
++    }
++
++    /// The game's catalog entry says where its saves are (customAttributes.CloudSaveFolder).
++    private func fetchConfig(_ game: EpicGame, token: String) async throws -> EpicSaveConfig? {
++        guard let id = game.catalogItemId, !game.namespace.isEmpty else { return nil }
++        var components = URLComponents(string: "https://catalog-public-service-prod06.ol.epicgames.com/catalog/api/shared/namespace/\(game.namespace)/bulk/items")!
++        components.queryItems = [URLQueryItem(name: "id", value: id), URLQueryItem(name: "includeDLCDetails", value: "true"),
++                                 URLQueryItem(name: "includeMainGameDetails", value: "true"),
++                                 URLQueryItem(name: "country", value: "US"), URLQueryItem(name: "locale", value: "en-US")]
++        var request = URLRequest(url: components.url!)
++        request.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
++        request.setValue(EpicCloudHTTP.userAgent, forHTTPHeaderField: "User-Agent")
++        let (data, response) = try await URLSession.shared.data(for: request)
++        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw EpicContentError.httpStatus((response as? HTTPURLResponse)?.statusCode ?? 0) }
++        let items = try JSONSerialization.jsonObject(with: data) as? [String: Any]
++        return EpicSaveConfig.from(customAttributes: (items?[id] as? [String: Any])?["customAttributes"] as? [String: Any])
++    }
++
++    private func context(_ app: String) async throws -> Context? {
++        guard let record = EpicInstaller.shared.installed[app] else { return nil }
++        let token = try await EpicAuth.shared.validAccessToken()
++        guard let account = EpicAuth.shared.accountID else { throw EpicAuthError.notSignedIn }
++        var stored = records[app] ?? Record()
++        if stored.config == nil && !stored.noCloud {
++            if let config = try await fetchConfig(record.game, token: token) { stored.config = config } else { stored.noCloud = true }
++            records[app] = stored
++            persist()
++        }
++        guard let config = stored.config else { return nil }
++        let drive = LibraryModel.drive
++        guard let user = SteamCloudPaths.userFolder(drive: drive)?.url else {
++            throw EpicContentError.invalid("The Wine prefix has no user folder yet. Start a game once, then sync.")
++        }
++        let paths = EpicSavePaths(drive: drive, userFolder: user,
++                                  installFolder: drive.appendingPathComponent(record.installDir, isDirectory: true), accountID: account)
++        guard let folder = paths.resolve(config.folder) else {
++            throw EpicContentError.invalid("This game keeps its saves in a place Madeira does not know yet.")
++        }
++        return Context(record: record, config: config, folder: folder, account: account,
++                       transport: EpicCloudHTTP(token: token, accountID: account))
++    }
++
++    nonisolated private static func scan(_ folder: URL, _ config: EpicSaveConfig) async throws -> [EpicDeviceSave] {
++        try await Task.detached(priority: .utility) { try EpicSaveScan.scan(folder, config: config) }.value
++    }
++
++    private func look(_ app: String) async throws -> Looked? {
++        guard let context = try await context(app) else { return nil }
++        let device = try await Self.scan(context.folder, context.config)
++        let latest = try await EpicCloudSaves.latest(app: app, transport: context.transport)
++        let deviceMap = Dictionary(device.map { ($0.path, $0.sha) }, uniquingKeysWith: { a, _ in a })
++        let verdict = EpicSavePlanner.decide(device: deviceMap, cloud: latest?.snapshot.files, baseline: records[app]?.baseline)
++        return Looked(context: context, device: device, latest: latest, verdict: verdict)
++    }
++
++    private func show(_ app: String, _ looked: Looked) {
++        update(app) { s in
++            s.phase = .ready
++            s.verdict = looked.verdict
++            s.deviceFiles = looked.device.count
++            s.deviceBytes = looked.device.reduce(0) { $0 + $1.size }
++            s.deviceDate = looked.device.map(\.modified).max()
++            s.cloudFiles = looked.latest?.snapshot.files.count ?? 0
++            s.cloudBytes = looked.latest?.snapshot.sizes.values.reduce(0, +) ?? 0
++            s.cloudDate = looked.latest?.snapshot.date
++        }
++    }
++
++    // MARK: actions
++
++    /// Compares the device with the cloud. `automatic` (opening the page, starting Madeira) also
++    /// downloads a newer cloud save and, only if the setting asks for it, uploads a newer device save.
++    func check(_ app: String, automatic: Bool = true) async {
++        guard Self.enabled, EpicAuth.shared.signedIn, !busy.contains(app) else { return }
++        busy.insert(app); defer { busy.remove(app) }
++        update(app) { $0.phase = .checking; $0.note = nil }
++        do {
++            guard let looked = try await look(app) else {
++                update(app) { $0.phase = .unsupported }
++                return
++            }
++            show(app, looked)
++            log("app=\(app) check verdict=\(looked.verdict) device=\(looked.device.count) cloud=\(looked.latest?.snapshot.files.count ?? 0)")
++            if looked.verdict == .inSync || looked.verdict == .empty { remember(app, looked) }
++            guard automatic else { return }
++            switch looked.verdict {
++            case .download: await download(app, looked)
++            case .upload where EpicCloudSetting.shared.autoUpload: await upload(app, looked)
++            default: break
++            }
++        } catch {
++            fail(app, error)
++        }
++    }
++
++    /// The Sync now button: does what the comparison says. A conflict waits for the user's choice.
++    func syncNow(_ app: String) async {
++        guard Self.enabled, EpicAuth.shared.signedIn, !busy.contains(app) else { return }
++        busy.insert(app); defer { busy.remove(app) }
++        update(app) { $0.phase = .checking; $0.note = nil }
++        do {
++            guard let looked = try await look(app) else { update(app) { $0.phase = .unsupported }; return }
++            show(app, looked)
++            switch looked.verdict {
++            case .download: await download(app, looked)
++            case .upload: await upload(app, looked)
++            case .inSync, .empty: remember(app, looked); update(app) { $0.note = looked.verdict == .empty ? "No saves yet." : "Already in sync." }
++            case .conflict: update(app) { $0.note = "The saves differ. Choose which to keep." }
++            }
++        } catch {
++            fail(app, error)
++        }
++    }
++
++    /// The user's choice for a conflict: Epic's saves come down, or this device's go up as a new snapshot.
++    func resolve(_ app: String, useCloud: Bool) async {
++        guard Self.enabled, EpicAuth.shared.signedIn, !busy.contains(app) else { return }
++        busy.insert(app); defer { busy.remove(app) }
++        update(app) { $0.phase = .checking; $0.note = nil }
++        do {
++            guard let looked = try await look(app) else { update(app) { $0.phase = .unsupported }; return }
++            show(app, looked)
++            if useCloud {
++                guard looked.latest != nil else { update(app) { $0.note = "Epic has no saves for this game." }; return }
++                await download(app, looked)
++            } else {
++                await upload(app, looked)
++            }
++        } catch {
++            fail(app, error)
++        }
++    }
++
++    func startupCheck() {
++        guard Self.enabled, EpicAuth.shared.signedIn else { return }
++        Task {
++            for app in EpicInstaller.shared.installed.keys.sorted() {
++                await check(app, automatic: true)
++            }
++        }
++    }
++
++    private func remember(_ app: String, _ looked: Looked) {
++        var record = records[app] ?? Record()
++        record.baseline = EpicSaveBaseline(device: Dictionary(looked.device.map { ($0.path, $0.sha) }, uniquingKeysWith: { a, _ in a }),
++                                           cloud: looked.latest?.snapshot.files ?? [:], snapshot: looked.latest?.snapshot.buildVersion)
++        records[app] = record
++        persist()
++    }
++
++    private func download(_ app: String, _ looked: Looked) async {
++        guard let latest = looked.latest else { return }
++        update(app) { $0.phase = .downloading }
++        do {
++            let result = try await EpicCloudSaves.download(latest.snapshot, all: latest.all, into: looked.context.folder,
++                                                           backup: Self.backup(for: looked.context.record), transport: looked.context.transport)
++            let after = try await Self.scan(looked.context.folder, looked.context.config)
++            var record = records[app] ?? Record()
++            record.baseline = EpicSaveBaseline(device: Dictionary(after.map { ($0.path, $0.sha) }, uniquingKeysWith: { a, _ in a }),
++                                               cloud: latest.snapshot.files, snapshot: latest.snapshot.buildVersion)
++            records[app] = record
++            persist()
++            log("app=\(app) downloaded files=\(result.files) backed-up=\(result.backedUp)")
++            var next = looked
++            next.device = after
++            next.verdict = .inSync
++            show(app, next)
++            update(app) { $0.note = "Downloaded \(result.files) save file\(result.files == 1 ? "" : "s")."
++                + (result.backedUp > 0 ? " \(result.backedUp) replaced on this device \(result.backedUp == 1 ? "was" : "were") backed up." : "") }
++        } catch {
++            fail(app, error)
++        }
++    }
++
++    private func upload(_ app: String, _ looked: Looked) async {
++        update(app) { $0.phase = .uploading }
++        do {
++            let result = try await EpicCloudSaves.upload(looked.device, app: app, accountID: looked.context.account,
++                                                         config: looked.context.config, transport: looked.context.transport)
++            let map = Dictionary(looked.device.map { ($0.path, $0.sha) }, uniquingKeysWith: { a, _ in a })
++            var record = records[app] ?? Record()
++            record.baseline = EpicSaveBaseline(device: map, cloud: map, snapshot: result.version)
++            records[app] = record
++            persist()
++            log("app=\(app) uploaded files=\(result.files) snapshot=\(result.version)")
++            var next = looked
++            next.verdict = .inSync
++            show(app, next)
++            update(app) { $0.cloudFiles = result.files; $0.cloudDate = EpicCloudSaves.date(ofBuildVersion: result.version)
++                $0.note = "Uploaded \(result.files) save file\(result.files == 1 ? "" : "s") as a new snapshot." }
++        } catch {
++            fail(app, error)
++        }
++    }
++
++    private func fail(_ app: String, _ error: Error) {
++        let message = (error as? EpicAuthError)?.message ?? error.localizedDescription
++        log("app=\(app) failed: \(message)")
++        update(app) { $0.phase = .failed(message) }
++    }
++}
++
++/// A game's Epic Cloud saves, on its Game details page below the Epic Games section.
++struct EpicCloudSection: View {
++    let appName: String
++    @ObservedObject private var cloud = EpicCloud.shared
++    @ObservedObject private var setting = EpicCloudSetting.shared
++    @ObservedObject private var installer = EpicInstaller.shared
++    @State private var confirmCloud = false
++    @State private var confirmDevice = false
++
++    private static func when(_ date: Date?) -> String { date?.formatted(date: .abbreviated, time: .shortened) ?? "unknown date" }
++    private static func size(_ bytes: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(min(bytes, UInt64(Int64.max))), countStyle: .file) }
++    private static func files(_ n: Int) -> String { "\(n) file\(n == 1 ? "" : "s")" }
++
++    var body: some View {
++        let state = cloud.state(appName)
++        if setting.on, installer.installed[appName] != nil, state.phase != .unsupported {
++            Section {
++                rows(state)
++            } header: {
++                Text("Epic Cloud saves")
++            } footer: {
++                Text("Saves are compared with Epic's cloud when Madeira starts and when this page opens, not while you play. A newer cloud save is downloaded and the files it replaces are kept in Files › Madeira › Epic Cloud Backups. This device's newer saves are uploaded as a new snapshot when you press Sync now\(setting.autoUpload ? " or automatically" : ""); older snapshots stay in the cloud. When both sides changed, nothing is replaced until you choose.")
++            }
++            .task { await cloud.check(appName, automatic: true) }
++        }
++    }
++
++    @ViewBuilder private func rows(_ state: EpicCloud.State) -> some View {
++        switch state.phase {
++        case .idle, .checking:
++            HStack(spacing: 10) { ProgressView(); Text("Checking Epic's cloud…").foregroundStyle(.secondary) }
++        case .downloading:
++            HStack(spacing: 10) { ProgressView(); Text("Downloading saves…").foregroundStyle(.secondary) }
++        case .uploading:
++            HStack(spacing: 10) { ProgressView(); Text("Uploading saves…").foregroundStyle(.secondary) }
++        case .failed(let message):
++            Text(message).font(.callout).foregroundStyle(.orange)
++            Button("Try again") { Task { await cloud.check(appName, automatic: false) } }
++        case .unsupported:
++            EmptyView()
++        case .ready:
++            ready(state)
++        }
++    }
++
++    @ViewBuilder private func ready(_ state: EpicCloud.State) -> some View {
++        switch state.verdict {
++        case .conflict:
++            Label("The saves on this device and in Epic's cloud differ", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
++            VStack(alignment: .leading, spacing: 3) {
++                Text("Epic's cloud: \(Self.when(state.cloudDate)) · \(Self.files(state.cloudFiles)) · \(Self.size(state.cloudBytes))")
++                Text("This device: \(Self.when(state.deviceDate)) · \(Self.files(state.deviceFiles)) · \(Self.size(state.deviceBytes))")
++            }.font(.caption).foregroundStyle(.secondary)
++            Text("Nothing is changed until you choose which to keep.").font(.caption).foregroundStyle(.secondary)
++            Button("Keep Epic's saves…") { confirmCloud = true }
++                .confirmationDialog("Use Epic's saves on this device? The files they replace are copied to Files › Madeira › Epic Cloud Backups first.",
++                                    isPresented: $confirmCloud, titleVisibility: .visible) {
++                    Button("Use Epic's saves", role: .destructive) { Task { await cloud.resolve(appName, useCloud: true) } }
++                    Button("Cancel", role: .cancel) {}
++                }
++            Button("Keep this device's saves…") { confirmDevice = true }
++                .confirmationDialog("Upload this device's saves as Epic's newest snapshot? Other devices will get them. The older snapshots stay in the cloud.",
++                                    isPresented: $confirmDevice, titleVisibility: .visible) {
++                    Button("Upload this device's saves", role: .destructive) { Task { await cloud.resolve(appName, useCloud: false) } }
++                    Button("Cancel", role: .cancel) {}
++                }
++        case .upload:
++            Label("This device has newer saves", systemImage: "icloud.and.arrow.up").foregroundStyle(.secondary)
++            summary(state)
++            Button("Sync now") { Task { await cloud.syncNow(appName) } }
++        case .download:
++            Label("Epic's cloud has newer saves", systemImage: "icloud.and.arrow.down").foregroundStyle(.secondary)
++            summary(state)
++            Button("Sync now") { Task { await cloud.syncNow(appName) } }
++        case .empty:
++            Text("No saves in Epic's cloud or on this device for this game.").foregroundStyle(.secondary)
++            Button("Sync now") { Task { await cloud.syncNow(appName) } }
++        default:
++            Label("In sync", systemImage: "checkmark.icloud").foregroundStyle(.secondary)
++            summary(state)
++            Button("Sync now") { Task { await cloud.syncNow(appName) } }
++        }
++        if let note = state.note { Text(note).font(.caption).foregroundStyle(.secondary) }
++    }
++
++    @ViewBuilder private func summary(_ state: EpicCloud.State) -> some View {
++        if state.cloudFiles > 0 { LabeledContent("Epic's cloud", value: "\(Self.when(state.cloudDate)) · \(Self.files(state.cloudFiles))") }
++        if state.deviceFiles > 0 { LabeledContent("This device", value: "\(Self.when(state.deviceDate)) · \(Self.files(state.deviceFiles))") }
++    }
++}
++
++/// Settings › Epic Games: the Epic Cloud saves switches (shown while signed in).
++struct EpicCloudSettingRows: View {
++    @ObservedObject private var setting = EpicCloudSetting.shared
++    var body: some View {
++        Toggle("Sync saves with Epic Cloud", isOn: $setting.on)
++        if setting.on {
++            Toggle("Upload newer saves automatically", isOn: $setting.autoUpload)
++        }
++    }
++}
+diff -ruN a/app/Madeira/Epic/EpicCloudSaves.swift b/app/Madeira/Epic/EpicCloudSaves.swift
+--- a/app/Madeira/Epic/EpicCloudSaves.swift	1970-01-01 01:00:00.000000000 +0100
++++ b/app/Madeira/Epic/EpicCloudSaves.swift	2026-10-15 18:57:18.141807034 +0200
+@@ -0,0 +1,609 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Madeira Converter Exception: see LICENSE-EXCEPTION.md
++//
++// Epic Cloud saves: the protocol and the sync decision, Foundation only.
++//
++// Ported from Legendary (GPL-3.0-or-later, https://github.com/derrod/legendary):
++// api/egs.py (get_user_cloud_saves, create_game_cloud_saves), core.py (get_save_path,
++// upload_save, download_saves), utils/savegame_helper.py (package_savegame),
++// models/chunk.py and models/manifest.py (the writers), utils/rolling_hash.py.
++//
++// A cloud save is a snapshot: manifests/<yyyy.MM.dd-HH.mm.ss>.manifest plus the 1 MiB
++// chunks it names, all under the account's savesync/<app> folder. A newer upload is a
++// new snapshot and the older ones stay, which is also this file's safety net: nothing
++// is ever overwritten or deleted in the cloud.
++
++import Foundation
++#if canImport(FoundationNetworking)
++import FoundationNetworking
++#endif
++import zlib
++
++// MARK: - Writing chunks and manifests
++
++/// Little-endian byte writer for Epic's binary formats.
++struct EpicWriter {
++    private(set) var bytes = [UInt8]()
++
++    mutating func u8(_ value: Int) { bytes.append(UInt8(truncatingIfNeeded: value)) }
++    mutating func u32(_ value: Int) { for i in 0..<4 { bytes.append(UInt8(truncatingIfNeeded: value >> (i * 8))) } }
++    mutating func i32(_ value: Int32) { u32(Int(UInt32(bitPattern: value))) }
++    mutating func u64(_ value: UInt64) { for i in 0..<8 { bytes.append(UInt8(truncatingIfNeeded: value >> (UInt64(i) * 8))) } }
++    mutating func raw(_ data: Data) { bytes.append(contentsOf: data) }
++    /// Legendary's write_fstring: length including the terminator, negative for UTF-16.
++    mutating func string(_ text: String) {
++        if text.isEmpty { i32(0); return }
++        if text.unicodeScalars.allSatisfy({ $0.isASCII }) {
++            i32(Int32(text.unicodeScalars.count + 1))
++            bytes.append(contentsOf: Array(text.utf8)); bytes.append(0)
++        } else {
++            let units = Array(text.utf16)
++            i32(-Int32(units.count + 1))
++            for unit in units { bytes.append(UInt8(unit & 0xFF)); bytes.append(UInt8(unit >> 8)) }
++            bytes.append(0); bytes.append(0)
++        }
++    }
++    /// Starts a section: its size (itself included) is filled in by `close`.
++    mutating func open() -> Int { let at = bytes.count; u32(0); return at }
++    mutating func close(_ at: Int) {
++        let size = bytes.count - at
++        for i in 0..<4 { bytes[at + i] = UInt8(truncatingIfNeeded: size >> (i * 8)) }
++    }
++    var data: Data { Data(bytes) }
++}
++
++enum EpicSaveWriter {
++    static let chunkSize = 1024 * 1024
++    static let featureLevel = 18   // Legendary's default serialisation version for saves
++
++    // The rolling hash Epic uses (a CRC-64-ECMA variation), utils/rolling_hash.py.
++    private static let table: [UInt64] = (0..<256).map { index in
++        var value = UInt64(index)
++        for _ in 0..<8 { value = value & 1 != 0 ? (value >> 1) ^ 0xC96C5795D7870F42 : value >> 1 }
++        return value
++    }
++    static func rollingHash(_ data: Data) -> UInt64 {
++        var h: UInt64 = 0
++        for byte in data { h = ((h << 1) | (h >> 63)) ^ table[Int(byte)] }
++        return h
++    }
++
++    static func deflate(_ input: Data) throws -> Data {
++        var length = compressBound(uLong(input.count))
++        var output = Data(count: Int(length))
++        let status = output.withUnsafeMutableBytes { dst in
++            input.withUnsafeBytes { src in
++                compress(dst.bindMemory(to: Bytef.self).baseAddress, &length,
++                         src.bindMemory(to: Bytef.self).baseAddress, uLong(input.count))
++            }
++        }
++        guard status == Z_OK else { throw EpicContentError.invalid("Could not compress a save chunk.") }
++        return output.prefix(Int(length))
++    }
++
++    static func crc32(_ data: Data) -> UInt32 {
++        data.withUnsafeBytes { UInt32(zlib.crc32(0, $0.bindMemory(to: Bytef.self).baseAddress, uInt($0.count))) }
++    }
++
++    struct BuiltChunk {
++        var guid: [UInt32]          // four little-endian words
++        var hash: UInt64
++        var sha: Data
++        var group: Int
++        var file: Data              // the whole .chunk file
++        var path: String
++    }
++
++    /// A chunk file: header version 3 (66 bytes) and the zlib-compressed payload, padded
++    /// with zeros to 1 MiB first, as Legendary's Chunk.data setter and write() do.
++    static func chunk(_ payload: Data, guid: [UInt32]) throws -> BuiltChunk {
++        guard payload.count <= chunkSize else { throw EpicContentError.invalid("A save chunk is larger than 1 MiB.") }
++        var padded = payload
++        if padded.count < chunkSize { padded.append(Data(count: chunkSize - padded.count)) }
++        let hash = rollingHash(padded), sha = EpicSHA1.hash(padded)
++        let packed = try deflate(padded)
++        var w = EpicWriter()
++        w.u32(0xB1FE3AA2); w.u32(3); w.u32(66); w.u32(packed.count)
++        for word in guid { w.u32(Int(word)) }
++        w.u64(hash); w.u8(1)                       // stored_as: compressed
++        w.raw(sha); w.u8(3)                        // hash_type: rolling + SHA-1
++        w.u32(padded.count)                        // uncompressed size
++        w.raw(packed)
++        var guidBytes = Data()
++        for word in guid { for i in 0..<4 { guidBytes.append(UInt8(truncatingIfNeeded: word >> UInt32(i * 8))) } }
++        let group = Int(crc32(guidBytes) % 100)
++        let path = String(format: "ChunksV4/%02d/%016llX_%@.chunk", group, hash,
++                          guid.map { String(format: "%08X", $0) }.joined())
++        return BuiltChunk(guid: guid, hash: hash, sha: sha, group: group, file: w.data, path: path)
++    }
++
++    static func randomGUID() -> [UInt32] {
++        var generator = SystemRandomNumberGenerator()
++        return (0..<4).map { _ in UInt32.random(in: 0...UInt32.max, using: &generator) }
++    }
++
++    struct SaveFile { var path: String; var data: Data }
++    struct Package {
++        var manifestPath: String
++        var buildVersion: String
++        /// Chunks first and the manifest last, so a manifest never names a missing chunk.
++        var uploads: [(path: String, data: Data)]
++        var fileCount: Int
++    }
++
++    static func buildVersion(_ date: Date) -> String {
++        let f = DateFormatter()
++        f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "UTC")
++        f.dateFormat = "yyyy.MM.dd-HH.mm.ss"
++        return f.string(from: date)
++    }
++
++    /// utils/savegame_helper.py package_savegame: files sorted case-insensitively and packed
++    /// back to back into 1 MiB chunks; one chunk part per piece of a file.
++    static func package(files: [SaveFile], appName: String, accountID: String, saveFolder: String, date: Date,
++                        guid: () -> [UInt32] = randomGUID) throws -> Package {
++        struct Part { var guid: [UInt32]; var offset: Int; var size: Int }
++        struct Item { var path: String; var sha: Data; var parts: [Part] }
++        var items = [Item](), built = [BuiltChunk]()
++        var currentGUID: [UInt32]?, buffer = Data()
++
++        func flush() throws {
++            guard let id = currentGUID else { return }
++            built.append(try chunk(buffer, guid: id))
++            currentGUID = nil; buffer = Data()
++        }
++        for file in files.sorted(by: { $0.path.lowercased() < $1.path.lowercased() }) {
++            var item = Item(path: file.path, sha: EpicSHA1.hash(file.data), parts: [])
++            var offset = 0
++            while offset < file.data.count {
++                if currentGUID == nil { currentGUID = guid() }
++                let size = min(file.data.count - offset, chunkSize - buffer.count)
++                item.parts.append(Part(guid: currentGUID!, offset: buffer.count, size: size))
++                buffer.append(file.data.subdata(in: offset..<offset + size))
++                offset += size
++                if buffer.count >= chunkSize { try flush() }
++            }
++            items.append(item)
++        }
++        try flush()
++
++        let version = buildVersion(date)
++        var body = EpicWriter()
++        // metadata
++        var at = body.open()
++        body.u8(0); body.u32(featureLevel); body.u8(0); body.u32(0)          // data_version, feature level, is_file_data, app_id
++        body.string(appName + accountID); body.string(version); body.string(""); body.string("")
++        body.u32(0); body.string(""); body.string(""); body.string("")       // prerequisites
++        body.close(at)
++        // chunk data list
++        at = body.open()
++        body.u8(0); body.u32(built.count)
++        for c in built { for word in c.guid { body.u32(Int(word)) } }
++        for c in built { body.u64(c.hash) }
++        for c in built { body.raw(c.sha) }
++        for c in built { body.u8(c.group) }
++        for _ in built { body.u32(chunkSize) }
++        for c in built { body.u64(UInt64(c.file.count)) }
++        body.close(at)
++        // file manifest list
++        at = body.open()
++        body.u8(0); body.u32(items.count)
++        for i in items { body.string(i.path) }
++        for _ in items { body.string("") }                                   // symlink targets
++        for i in items { body.raw(i.sha) }
++        for _ in items { body.u8(0) }                                        // flags
++        for _ in items { body.u32(0) }                                       // install tags
++        for i in items {
++            body.u32(i.parts.count)
++            for p in i.parts {
++                body.u32(28)
++                for word in p.guid { body.u32(Int(word)) }
++                body.u32(p.offset); body.u32(p.size)
++            }
++        }
++        body.close(at)
++        // custom fields
++        at = body.open()
++        body.u8(0); body.u32(1)
++        body.string("CloudSaveFolder"); body.string(saveFolder)
++        body.close(at)
++
++        let raw = body.data, packed = try deflate(raw)
++        var m = EpicWriter()
++        m.u32(0x44BEC00C); m.u32(41); m.u32(raw.count); m.u32(packed.count)
++        m.raw(EpicSHA1.hash(raw)); m.u8(1); m.u32(featureLevel)
++        m.raw(packed)
++
++        let manifestPath = "manifests/\(version).manifest"
++        var uploads = built.map { (path: $0.path, data: $0.file) }
++        uploads.append((path: manifestPath, data: m.data))
++        return Package(manifestPath: manifestPath, buildVersion: version, uploads: uploads, fileCount: items.count)
++    }
++}
++
++// MARK: - Where a game keeps its saves
++
++/// What the game's catalog entry says about its cloud saves (customAttributes).
++struct EpicSaveConfig: Codable, Equatable {
++    var folder: String
++    var include: [String]
++    var exclude: [String]
++
++    /// customAttributes of a catalog item: CloudSaveFolder, CloudIncludeList, CloudExcludeList.
++    static func from(customAttributes: [String: Any]?) -> EpicSaveConfig? {
++        func value(_ key: String) -> String? { ((customAttributes?[key] as? [String: Any])?["value"] as? String) }
++        guard let folder = value("CloudSaveFolder"), !folder.isEmpty else { return nil }
++        func list(_ s: String?) -> [String] {
++            (s ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
++        }
++        return EpicSaveConfig(folder: folder, include: list(value("CloudIncludeList")), exclude: list(value("CloudExcludeList")))
++    }
++
++    /// utils/savegame_helper.py _filename_matches.
++    static func matches(_ name: String, _ patterns: [String]) -> Bool {
++        for pattern in patterns {
++            if pattern.hasSuffix("/"), name.hasPrefix(pattern) { return true }
++            if name.hasSuffix(pattern) { return true }
++            if fnmatch(pattern, name, 0) == 0 { return true }
++        }
++        return false
++    }
++    func includes(_ relative: String) -> Bool {
++        if !include.isEmpty { return Self.matches(relative, include) }
++        if !exclude.isEmpty { return !Self.matches(relative, exclude) }
++        return true
++    }
++}
++
++/// The Windows folders of Madeira's Wine prefix that Epic's save-folder variables stand for.
++struct EpicSavePaths {
++    var drive: URL            // drive_c
++    var userFolder: URL       // drive_c/users/<name>
++    var installFolder: URL    // the game's install folder
++    var accountID: String
++
++    /// core.py get_save_path for a Wine prefix. nil: an unknown variable, no base folder, or
++    /// a path that would leave drive_c.
++    func resolve(_ template: String) -> URL? {
++        let parts = template.replacingOccurrences(of: "\\", with: "/").split(separator: "/", omittingEmptySubsequences: true).map(String.init)
++        guard let first = parts.first else { return nil }
++        let base: URL
++        switch first.lowercased() {
++        case "{installdir}": base = installFolder
++        case "{appdata}": base = userFolder.appendingPathComponent("AppData/Local", isDirectory: true)
++        case "{userdir}": base = userFolder.appendingPathComponent("Documents", isDirectory: true)
++        case "{userprofile}": base = userFolder
++        case "{usersavedgames}": base = userFolder.appendingPathComponent("Saved Games", isDirectory: true)
++        default: return nil
++        }
++        var stack = base.standardizedFileURL.pathComponents
++        for part in parts.dropFirst() {
++            switch part.lowercased() {
++            case ".": continue
++            case "..": if stack.count > 1 { stack.removeLast() }
++            case "{epicid}": stack.append(accountID)
++            default:
++                if part.hasPrefix("{") && part.hasSuffix("}") { return nil }
++                if part.contains(":") || part.utf8.count > 255 { return nil }
++                stack.append(part)
++            }
++        }
++        let root = drive.standardizedFileURL.pathComponents
++        guard stack.count > root.count, Array(stack.prefix(root.count)) == root else { return nil }
++        return Self.resolveCase(base: drive, parts: Array(stack.dropFirst(root.count)))
++    }
++
++    /// Wine ignores case and iOS does not: follow each part by case-insensitive match.
++    static func resolveCase(base: URL, parts: [String]) -> URL {
++        var url = base
++        for (index, part) in parts.enumerated() {
++            let exact = url.appendingPathComponent(part, isDirectory: index < parts.count - 1)
++            if FileManager.default.fileExists(atPath: exact.path) { url = exact; continue }
++            let names = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
++            if let match = names.first(where: { $0.caseInsensitiveCompare(part) == .orderedSame }) {
++                url = url.appendingPathComponent(match, isDirectory: index < parts.count - 1)
++            } else {
++                url = exact
++            }
++        }
++        return url
++    }
++}
++
++// MARK: - The device's side
++
++struct EpicDeviceSave: Equatable {
++    var path: String          // relative, forward slashes
++    var size: UInt64
++    var sha: String           // hex SHA-1
++    var modified: Date
++    var url: URL
++}
++
++enum EpicSaveScan {
++    static let maximumFiles = 2000
++    static let maximumFileSize: UInt64 = 64 * 1024 * 1024
++    static let maximumTotal: UInt64 = 128 * 1024 * 1024
++
++    static func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
++
++    /// The regular files under `folder` that pass the game's filters. A missing folder is an
++    /// empty save. Symlinks are never followed.
++    static func scan(_ folder: URL, config: EpicSaveConfig) throws -> [EpicDeviceSave] {
++        guard FileManager.default.fileExists(atPath: folder.path) else { return [] }
++        let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
++        guard let walker = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: keys) else { return [] }
++        let root = folder.standardizedFileURL.path
++        var result = [EpicDeviceSave](), total: UInt64 = 0
++        for case let url as URL in walker {
++            let values = try url.resourceValues(forKeys: Set(keys))
++            guard values.isSymbolicLink != true, values.isRegularFile == true else { continue }
++            let full = url.standardizedFileURL.path
++            guard full.hasPrefix(root + "/") else { continue }
++            let relative = String(full.dropFirst(root.count + 1))
++            guard config.includes(relative) else { continue }
++            let size = UInt64(values.fileSize ?? 0)
++            guard size <= maximumFileSize else { throw EpicContentError.invalid("A save file is larger than 64 MB.") }
++            total += size
++            guard result.count < maximumFiles, total <= maximumTotal else {
++                throw EpicContentError.invalid("This game's saves are too large to sync (over 2000 files or 128 MB).")
++            }
++            result.append(EpicDeviceSave(path: relative, size: size, sha: hex(try EpicSHA1.file(url)),
++                                         modified: values.contentModificationDate ?? Date(timeIntervalSince1970: 0), url: url))
++        }
++        return result.sorted { $0.path.lowercased() < $1.path.lowercased() }
++    }
++}
++
++// MARK: - The decision
++
++/// What was identical the last time the device and the cloud were synced.
++struct EpicSaveBaseline: Codable, Equatable {
++    var device: [String: String]   // path -> SHA-1 on the device after that sync
++    var cloud: [String: String]    // path -> SHA-1 in the cloud snapshot after it
++    var snapshot: String?          // that snapshot's build version
++}
++
++enum EpicSaveVerdict: Equatable {
++    case empty        // no saves on either side
++    case inSync
++    case download     // the cloud changed, this device did not
++    case upload       // this device changed, the cloud did not
++    case conflict     // both changed, or they differ and nothing says which is newer
++}
++
++enum EpicSavePlanner {
++    /// `cloud` nil: the account has no save snapshot for the game. Maps are path -> SHA-1.
++    static func decide(device: [String: String], cloud: [String: String]?, baseline: EpicSaveBaseline?) -> EpicSaveVerdict {
++        let cloudMap = cloud ?? [:]
++        if device.isEmpty && cloudMap.isEmpty { return .empty }
++        if device == cloudMap { return .inSync }
++        guard let baseline else {
++            if device.isEmpty { return .download }
++            if cloudMap.isEmpty { return .upload }
++            return .conflict
++        }
++        let deviceChanged = device != baseline.device
++        // Nothing in the cloud any more (deleted elsewhere): never fetched back, and not a conflict.
++        if cloudMap.isEmpty { return deviceChanged ? .upload : .inSync }
++        switch (deviceChanged, cloudMap != baseline.cloud) {
++        case (false, false): return .inSync
++        case (false, true): return .download
++        case (true, false): return .upload
++        case (true, true): return .conflict
++        }
++    }
++}
++
++// MARK: - The cloud's side
++
++struct EpicCloudObject: Equatable {
++    var path: String
++    var readLink: String?
++    var writeLink: String?
++}
++
++/// The datastorage service, or a stand-in for tests.
++protocol EpicCloudTransport {
++    /// Every file the account has for the game (keys are full remote paths).
++    func list(app: String) async throws -> [EpicCloudObject]
++    func read(_ object: EpicCloudObject) async throws -> Data
++    /// Upload targets for the given paths relative to the game's folder.
++    func writeTargets(app: String, paths: [String]) async throws -> [EpicCloudObject]
++    func write(_ object: EpicCloudObject, data: Data) async throws
++}
++
++/// api/egs.py get_user_cloud_saves / create_game_cloud_saves over URLSession.
++struct EpicCloudHTTP: EpicCloudTransport {
++    static let host = "datastorage-public-service-liveegs.live.use1a.on.epicgames.com"
++    static let userAgent = "UELauncher/11.0.1-14907503+++Portal+Release-Live Windows/10.0.19041.1.256.64bit"
++    var token: String
++    var accountID: String
++    static let sizeLimit = 128 * 1024 * 1024
++
++    private func decode(_ data: Data) throws -> [EpicCloudObject] {
++        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
++              let files = json["files"] as? [String: Any] else { throw EpicContentError.invalid("Unexpected answer from Epic's save service.") }
++        return files.keys.sorted().map { key in
++            let entry = files[key] as? [String: Any]
++            return EpicCloudObject(path: key, readLink: entry?["readLink"] as? String, writeLink: entry?["writeLink"] as? String)
++        }
++    }
++    private func request(_ url: URL, method: String = "GET", json: Any? = nil) async throws -> Data {
++        var r = URLRequest(url: url)
++        r.httpMethod = method
++        r.timeoutInterval = 30
++        r.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
++        r.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
++        if let json {
++            r.setValue("application/json", forHTTPHeaderField: "Content-Type")
++            r.httpBody = try JSONSerialization.data(withJSONObject: json)
++        }
++        let (data, response) = try await URLSession.shared.data(for: r)
++        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
++        guard (200..<300).contains(status) else { throw EpicContentError.httpStatus(status) }
++        return data
++    }
++    private func savesyncURL(_ app: String) throws -> URL {
++        guard let url = URL(string: "https://\(Self.host)/api/v1/access/egstore/savesync/\(accountID)/\(app)/") else {
++            throw EpicContentError.invalid("Invalid Epic save URL.")
++        }
++        return url
++    }
++    func list(app: String) async throws -> [EpicCloudObject] {
++        try decode(try await request(try savesyncURL(app)))
++    }
++    func read(_ object: EpicCloudObject) async throws -> Data {
++        guard let link = object.readLink, let url = URL(string: link), url.scheme == "https" else {
++            throw EpicContentError.invalid("Epic gave no download link for a save file.")
++        }
++        // A pre-signed link: no Authorization header.
++        return try await EpicManifest.download(URLRequest(url: url), limit: Self.sizeLimit)
++    }
++    func writeTargets(app: String, paths: [String]) async throws -> [EpicCloudObject] {
++        try decode(try await request(try savesyncURL(app), method: "POST", json: ["files": paths]))
++    }
++    func write(_ object: EpicCloudObject, data: Data) async throws {
++        guard let link = object.writeLink, let url = URL(string: link), url.scheme == "https" else {
++            throw EpicContentError.invalid("Epic gave no upload link for a save file.")
++        }
++        var r = URLRequest(url: url)
++        r.httpMethod = "PUT"
++        r.timeoutInterval = 60
++        let (_, response) = try await URLSession.shared.upload(for: r, from: data)
++        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
++        guard (200..<300).contains(status) else { throw EpicContentError.httpStatus(status) }
++    }
++}
++
++/// The newest snapshot the cloud holds for a game.
++struct EpicCloudSnapshot {
++    var buildVersion: String
++    var manifest: EpicManifest
++    var prefix: String            // remote folder of the snapshot's files, before "manifests/"
++    var files: [String: String]   // path -> SHA-1 hex
++    var sizes: [String: UInt64]
++    var date: Date?
++}
++
++struct EpicDownloadResult { var files: Int; var backedUp: Int }
++
++enum EpicCloudSaves {
++    static func date(ofBuildVersion version: String) -> Date? {
++        let f = DateFormatter()
++        f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "UTC")
++        f.dateFormat = "yyyy.MM.dd-HH.mm.ss"
++        return f.date(from: version)
++    }
++
++    /// The remote folder and name of a manifest object, or nil for any other file.
++    static func manifestName(_ path: String) -> (prefix: String, version: String)? {
++        let parts = path.split(separator: "/").map(String.init)
++        guard let at = parts.lastIndex(of: "manifests"), at == parts.count - 2, parts[at + 1].hasSuffix(".manifest") else { return nil }
++        return (parts[..<at].joined(separator: "/"), String(parts[at + 1].dropLast(".manifest".count)))
++    }
++
++    /// The newest snapshot (named by its build version, which sorts as a date), or nil when the
++    /// account has none. A manifest that cannot be read is an error, not "no save".
++    static func latest(app: String, transport: EpicCloudTransport) async throws -> (snapshot: EpicCloudSnapshot, all: [EpicCloudObject])? {
++        let all = try await transport.list(app: app)
++        let manifests = all.compactMap { object -> (EpicCloudObject, String, String)? in
++            manifestName(object.path).map { (object, $0.prefix, $0.version) }
++        }.sorted { $0.2 < $1.2 }
++        guard let newest = manifests.last else { return nil }
++        let manifest = try EpicManifest.parse(try await transport.read(newest.0))
++        var files = [String: String](), sizes = [String: UInt64]()
++        for file in manifest.files {
++            files[file.filename] = EpicSaveScan.hex(file.sha)
++            sizes[file.filename] = file.size
++        }
++        let snapshot = EpicCloudSnapshot(buildVersion: newest.2, manifest: manifest, prefix: newest.1, files: files, sizes: sizes,
++                                         date: date(ofBuildVersion: newest.2))
++        return (snapshot, all)
++    }
++
++    /// Writes a snapshot over `folder`. Everything is downloaded, assembled and checked in memory
++    /// first; only then are files written (each atomically), the ones they replace copied to
++    /// `backup` before. Files the snapshot does not name are left alone.
++    static func download(_ snapshot: EpicCloudSnapshot, all: [EpicCloudObject], into folder: URL, backup: URL,
++                         transport: EpicCloudTransport) async throws -> EpicDownloadResult {
++        let manifest = snapshot.manifest
++        let level = manifest.meta.featureLevel
++        var byPath = [String: EpicCloudObject]()
++        for object in all { byPath[object.path] = object }
++        var chunkData = [String: Data]()
++        var needed = Set<String>()
++        for file in manifest.files { for part in file.parts { needed.insert(part.guid) } }
++        for chunk in manifest.chunks where needed.contains(chunk.guid) {
++            let remote = snapshot.prefix + "/" + (try chunk.path(featureLevel: level))
++            guard let object = byPath[remote] else { throw EpicContentError.invalid("A save chunk is missing in Epic's cloud; nothing was changed.") }
++            let raw = try await transport.read(object)
++            // Chunks written by Epic's launcher may not match the manifest's size fields exactly;
++            // the file hashes below are the check that counts.
++            if let strict = try? EpicChunk.parse(raw, expected: chunk) {
++                chunkData[chunk.guid] = strict
++            } else {
++                chunkData[chunk.guid] = try EpicChunk.parse(raw)
++            }
++        }
++        var assembled = [(file: EpicManifest.File, data: Data)]()
++        var total = 0
++        for file in manifest.files {
++            var data = Data()
++            for part in file.parts {
++                guard let chunk = chunkData[part.guid], part.offset >= 0, part.size >= 0, part.offset + part.size <= chunk.count else {
++                    throw EpicContentError.invalid("A save file refers to missing data; nothing was changed.")
++                }
++                data.append(chunk.subdata(in: part.offset..<part.offset + part.size))
++            }
++            guard EpicSHA1.hash(data) == file.sha else { throw EpicContentError.invalid("A downloaded save file failed its check; nothing was changed.") }
++            total += data.count
++            guard total <= EpicSaveScan.maximumTotal else { throw EpicContentError.invalid("The cloud save is too large to sync.") }
++            assembled.append((file, data))
++        }
++        let stamp = snapshot.date ?? Date()
++        var backedUp = 0
++        for item in assembled {
++            let parts = item.file.filename.replacingOccurrences(of: "\\", with: "/").split(separator: "/").map(String.init)
++            guard !parts.isEmpty, !parts.contains(where: { $0 == ".." || $0 == "." || $0.contains(":") }) else {
++                throw EpicContentError.invalid("The cloud save names a file outside the save folder; nothing was changed.")
++            }
++            let target = EpicSavePaths.resolveCase(base: folder, parts: parts)
++            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
++            if FileManager.default.fileExists(atPath: target.path) {
++                if (try? EpicSHA1.file(target)) == item.file.sha { continue }   // identical already
++                let saved = parts.reduce(backup) { $0.appendingPathComponent($1) }
++                try FileManager.default.createDirectory(at: saved.deletingLastPathComponent(), withIntermediateDirectories: true)
++                try? FileManager.default.removeItem(at: saved)
++                try FileManager.default.copyItem(at: target, to: saved)
++                backedUp += 1
++            }
++            try item.data.write(to: target, options: .atomic)
++            try? FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: target.path)
++        }
++        return EpicDownloadResult(files: assembled.count, backedUp: backedUp)
++    }
++
++    /// Uploads the device's files as a new snapshot (chunks first, then its manifest).
++    static func upload(_ saves: [EpicDeviceSave], app: String, accountID: String, config: EpicSaveConfig,
++                       transport: EpicCloudTransport, date: Date = Date()) async throws -> (version: String, files: Int) {
++        guard !saves.isEmpty else { throw EpicContentError.invalid("There are no saves to upload.") }
++        var files = [EpicSaveWriter.SaveFile]()
++        for save in saves {
++            let data = try Data(contentsOf: save.url)
++            guard EpicSaveScan.hex(EpicSHA1.hash(data)) == save.sha else {
++                throw EpicContentError.invalid("A save file changed while it was being read. Try again when the game is not writing.")
++            }
++            files.append(EpicSaveWriter.SaveFile(path: save.path, data: data))
++        }
++        let package = try EpicSaveWriter.package(files: files, appName: app, accountID: accountID, saveFolder: config.folder, date: date)
++        let targets = try await transport.writeTargets(app: app, paths: package.uploads.map(\.path))
++        var byPath = [String: EpicCloudObject]()
++        for target in targets { byPath[target.path] = target }
++        for upload in package.uploads where byPath[upload.path] == nil {
++            throw EpicContentError.invalid("Epic gave no upload target for \(upload.path).")
++        }
++        for upload in package.uploads { try await transport.write(byPath[upload.path]!, data: upload.data) }
++        return (package.buildVersion, package.fileCount)
++    }
++}
+diff -ruN a/app/Madeira/Epic/EpicInstaller.swift b/app/Madeira/Epic/EpicInstaller.swift
+--- a/app/Madeira/Epic/EpicInstaller.swift	2026-10-15 18:57:18.078619536 +0200
++++ b/app/Madeira/Epic/EpicInstaller.swift	2026-10-15 18:57:18.152957768 +0200
+@@ -67,6 +67,7 @@
+                 for id in pending.keys { installs[id] = Install(state: .paused) }
+                 attachBackground()
+                 ready = true
++                EpicCloud.shared.startupCheck()
+             } catch { self.error = "Could not read Epic installs: " + error.localizedDescription }
+         }
+     }
+diff -ruN a/app/Madeira/Epic/EpicSignInView.swift b/app/Madeira/Epic/EpicSignInView.swift
+--- a/app/Madeira/Epic/EpicSignInView.swift	2026-10-15 18:57:18.022865862 +0200
++++ b/app/Madeira/Epic/EpicSignInView.swift	2026-10-15 18:57:18.160391592 +0200
+@@ -105,6 +105,7 @@
+         Section {
+             if let name = auth.accountName {
+                 LabeledContent("Signed in as", value: name.isEmpty ? "Epic account" : name)
++                EpicCloudSettingRows()
+                 Button("Sign out of Epic Games", role: .destructive) { confirmSignOut = true }
+             } else {
+                 Button { open(.epicSignIn) } label: { Label("Sign in to Epic Games", systemImage: "person.crop.circle.badge.plus") }
+diff -ruN a/app/Madeira/Library.swift b/app/Madeira/Library.swift
+--- a/app/Madeira/Library.swift	2026-10-15 18:57:18.100921006 +0200
++++ b/app/Madeira/Library.swift	2026-10-15 18:57:18.152957768 +0200
+@@ -3066,6 +3066,7 @@
+                 if let epic = entry.epicAppName {
+                     EpicEntrySection(appName: epic, run: { prerequisite in leaving = true; play(prerequisite) },
+                                      leave: { leaving = true; dismiss() })
++                    EpicCloudSection(appName: epic)
+                 }
+                 Section {
+                     // The Windows screen the game renders for (and the Desktop's size).
+diff -ruN a/app/Madeira.xcodeproj/project.pbxproj b/app/Madeira.xcodeproj/project.pbxproj
+--- a/app/Madeira.xcodeproj/project.pbxproj	2026-10-15 18:57:18.123222476 +0200
++++ b/app/Madeira.xcodeproj/project.pbxproj	2026-10-15 18:57:18.164108504 +0200
+@@ -31,6 +31,8 @@
+ 		B1000784 /* EpicManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000784 /* EpicManifest.swift */; };
+ 		B1000785 /* EpicChunk.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000785 /* EpicChunk.swift */; };
+ 		B1000786 /* EpicInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000786 /* EpicInstaller.swift */; };
++		B1000790 /* EpicCloudSaves.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000790 /* EpicCloudSaves.swift */; };
++		B1000791 /* EpicCloud.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000791 /* EpicCloud.swift */; };
+ 		A1000600 /* SteamInstall.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000600 /* SteamInstall.swift */; };
+ 		A1000609 /* SwiftSteam/Content/ContentDecryptor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000609 /* ContentDecryptor.swift */; };
+ 		A100060A /* SwiftSteam/Content/DepotDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200060A /* DepotDownloader.swift */; };
+@@ -210,6 +212,8 @@
+ 		B2000784 /* EpicManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicManifest.swift; sourceTree = "<group>"; };
+ 		B2000785 /* EpicChunk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicChunk.swift; sourceTree = "<group>"; };
+ 		B2000786 /* EpicInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicInstaller.swift; sourceTree = "<group>"; };
++		B2000790 /* EpicCloudSaves.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicCloudSaves.swift; sourceTree = "<group>"; };
++		B2000791 /* EpicCloud.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Epic/EpicCloud.swift; sourceTree = "<group>"; };
+ 		A2000600 /* SteamInstall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SteamInstall.swift"; sourceTree = "<group>"; };
+ 		A2000609 /* ContentDecryptor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SwiftSteam/Content/ContentDecryptor.swift"; sourceTree = "<group>"; };
+ 		A200060A /* DepotDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SwiftSteam/Content/DepotDownloader.swift"; sourceTree = "<group>"; };
+@@ -436,6 +440,8 @@
+ 				B2000784 /* EpicManifest.swift */,
+ 				B2000785 /* EpicChunk.swift */,
+ 				B2000786 /* EpicInstaller.swift */,
++				B2000790 /* EpicCloudSaves.swift */,
++				B2000791 /* EpicCloud.swift */,
+ 				A2000600 /* SteamInstall.swift */,
+ 				A2000609 /* ContentDecryptor.swift */,
+ 				A200060A /* DepotDownloader.swift */,
+@@ -775,6 +781,8 @@
+ 				B1000784 /* EpicManifest.swift in Sources */,
+ 				B1000785 /* EpicChunk.swift in Sources */,
+ 				B1000786 /* EpicInstaller.swift in Sources */,
++				B1000790 /* EpicCloudSaves.swift in Sources */,
++				B1000791 /* EpicCloud.swift in Sources */,
+ 				A1000600 /* SteamInstall.swift in Sources */,
+ 				A1000609 /* SwiftSteam/Content/ContentDecryptor.swift in Sources */,
+ 				A100060A /* SwiftSteam/Content/DepotDownloader.swift in Sources */,
+diff -ruN a/docs/EPIC.md b/docs/EPIC.md
+--- a/docs/EPIC.md	2026-10-15 18:57:18.138090122 +0200
++++ b/docs/EPIC.md	2026-10-15 18:57:18.167825415 +0200
+@@ -101,7 +101,65 @@
+ execution and Wine/FEX gameplay still require device testing. Launch arguments
+ do not supply EOS overlays, ownership-ticket files, third-party launchers or
+ anti-cheat support; games requiring those may not run. Updates, delta manifests,
+-DLC selection and cloud saves are outside this milestone.
++DLC selection are outside this milestone. Cloud saves are Milestone 3.
++
++## Milestone 3 — cloud saves
++
++Installed Epic games sync their saves with the account's Epic Cloud, like Steam's
++(`docs/STEAM_CLOUD.md`). Code: `EpicCloudSaves.swift` (protocol, formats and the decision, Foundation
++only) and `EpicCloud.swift` (when it runs, the page section, the switches).
++
++**Format.** A cloud save is a snapshot: `manifests/<yyyy.MM.dd-HH.mm.ss>.manifest` and the 1 MiB
++chunks it names, under `savesync/<account>/<app>/` on Epic's datastorage service
++(`datastorage-public-service-liveegs.live.use1a.on.epicgames.com`). Madeira reads and writes them
++exactly as Legendary does (`legendary/core.py` upload_save / download_saves,
++`utils/savegame_helper.py`, the chunk and manifest writers): header v3 chunks padded to 1 MiB with
++Epic's rolling hash and a SHA-1, a feature-level 18 manifest, files sorted case-insensitively,
++`CloudSaveFolder` as a custom field. A new upload is a new snapshot; older ones stay.
++
++**Where the saves are.** The game's catalog entry (`customAttributes`: `CloudSaveFolder`,
++`CloudIncludeList`, `CloudExcludeList`) gives a folder such as `{AppData}/Game/Saved`. Madeira maps
++`{AppData}`, `{UserDir}`, `{UserProfile}`, `{UserSavedGames}`, `{InstallDir}` and `{EpicID}` to the
++Wine prefix (`drive_c/users/<name>/...`, the install folder, the account ID), matching names without
++regard to case. A path that leaves `drive_c` or uses another variable is refused. A game with no
++`CloudSaveFolder` has no cloud saves and no section.
++
++**What it does.**
++1. Scans the save folder (include/exclude lists as Legendary applies them; symlinks never followed;
++   at most 2000 files and 128 MB) and fetches the newest snapshot's manifest.
++2. Compares file SHA-1s with a record of what both sides had at the last sync
++   (`epic-cloud-sync.json` in Application Support):
++   - the cloud changed only: **download**; the device changed only: **upload** as a new snapshot;
++   - both changed, or they differ with no record: a **conflict**, nothing is replaced until the user
++     chooses **Keep Epic's saves** or **Keep this device's saves**;
++   - nothing left in the cloud: not fetched back; not a conflict.
++3. A download fetches and checks every chunk and every file's SHA-1 in memory first, then writes the
++   files (each atomically, with the snapshot's date). If anything is missing or wrong, nothing is
++   written. A file it replaces is first copied to `Documents/Epic Cloud Backups/<game> (<app>)/<time>/`
++   (Files › Madeira). Files the snapshot does not name are left alone.
++4. An upload re-reads each file and checks it against the scan (a game still writing makes it stop),
++   uploads the chunks, then the manifest last.
++
++**When.** For every installed game when Madeira starts and when its page opens (downloads only, plus
++uploads if `env.MADEIRA_EPIC_CLOUD_AUTO_UPLOAD = 1`), and on **Sync now**. Not while a game runs: Madeira
++cannot tell when a game ends, so what was played is uploaded by the next start (with the automatic
++upload on) or by Sync now. **Settings › Epic Games** has the switches: *Sync saves with Epic Cloud*
++(`env.MADEIRA_EPIC_CLOUD`, on unless 0) and *Upload newer saves automatically* (off by default).
++Uploading is off by default because an upload becomes the newest snapshot, which Epic's own launcher
++on a PC may then offer; the first one deserves a deliberate press of Sync now.
++
++**Limits.** Nothing is ever deleted in the cloud. Encrypted save chunks are not supported (the chunk
++reader rejects them). A `CloudSaveFolder` that uses Mac-only variables or the legacy `locallow` /
++`roaming` forms is refused. The sync has not been run against a live account by its author; the
++formats were checked against Legendary (below).
++
++**Tests.** `python3 tests/host/check-epic-cloud.py` builds the production Swift with `swiftc`
++and checks: the decision table, filters and save-folder variables; a save written by the Swift
++code and read back by Legendary's own `Manifest` and `Chunk` classes (every file byte for byte, every
++chunk's rolling hash and SHA-1, manifest re-serialisation); a snapshot written by Legendary's
++`SaveGameHelper` restored by the Swift code (including backup of a replaced file and the snapshot's
++date); and a damaged chunk aborting a download without writing. It needs a copy of Legendary in
++`$LEGENDARY_SRC` (default `~/ref/legendary`); without it only the first group runs. Works on macOS and Linux.
+ 
+ ### Credits
+ 
+@@ -109,6 +167,7 @@
+ [Legendary](https://github.com/derrod/legendary), by derrod and contributors,
+ licensed GPL-3.0-or-later: `legendary/api/egs.py`, `models/manifest.py`,
+ `models/json_manifest.py`, `models/chunk.py`, `downloader/mp/manager.py`,
+-`downloader/mp/workers.py`, and `core.py` (`get_launch_parameters`). Madeira's
++`downloader/mp/workers.py`, `utils/savegame_helper.py`, `utils/rolling_hash.py`, and `core.py`
++(`get_launch_parameters`, `get_save_path`, `upload_save`, `download_saves`). Madeira's
+ Swift port uses Apple's Foundation/URLSession and zlib, with no Python runtime
+ or new package dependencies.
+diff -ruN a/tests/host/check-epic-cloud.py b/tests/host/check-epic-cloud.py
+--- a/tests/host/check-epic-cloud.py	1970-01-01 01:00:00.000000000 +0100
++++ b/tests/host/check-epic-cloud.py	2026-10-15 18:57:18.145523945 +0200
+@@ -0,0 +1,180 @@
++#!/usr/bin/env python3
++"""Epic Cloud saves, checked against Legendary's own reader and writer (Linux or macOS).
++
++Compiles the production app/Madeira/Epic/EpicCloudSaves.swift (with EpicChunk.swift and
++EpicManifest.swift) with swiftc into a host driver, then:
++
++  1. selftest        the decision table, filters, save-folder variables, chunk basics;
++  2. Swift -> Legendary   the driver uploads a synthetic save to a directory standing in for
++                          Epic's service, and Legendary's Manifest/Chunk classes read it back:
++                          every file must come out byte for byte, every chunk's rolling hash and
++                          SHA-1 must be right, and Legendary's own manifest checks must pass;
++  3. Legendary -> Swift   Legendary's SaveGameHelper writes a snapshot, the driver downloads it.
++
++Needs a Swift toolchain and a copy of Legendary (github.com/derrod/legendary) in $LEGENDARY_SRC
++(default ~/ref/legendary); without Legendary only step 1 runs. Legendary needs pycryptodomex for
++AES, which saves never use, so a stub stands in for it.
++"""
++import hashlib, os, shutil, subprocess, sys, tempfile, types
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++LEG = Path(os.environ.get("LEGENDARY_SRC", Path.home() / "ref" / "legendary"))
++EPIC = ROOT / "app" / "Madeira" / "Epic"
++failures = 0
++
++
++def check(ok, what):
++    global failures
++    print(("ok   " if ok else "FAIL ") + what)
++    if not ok:
++        failures += 1
++
++
++def build(work):
++    swiftc = shutil.which("swiftc") or str(Path.home() / "tools/swift/usr/bin/swiftc")
++    src = work / "src"
++    src.mkdir()
++    for name in ("EpicChunk.swift", "EpicManifest.swift", "EpicCloudSaves.swift"):
++        text = (EPIC / name).read_text(encoding="utf-8")
++        if sys.platform != "darwin":   # Linux splits URLSession into FoundationNetworking
++            text = text.replace("import Foundation\n", "import Foundation\n#if canImport(FoundationNetworking)\nimport FoundationNetworking\n#endif\n", 1)
++        (src / name).write_text(text, encoding="utf-8")
++    shutil.copy(Path(__file__).parent / "epic-cloud" / "main.swift", src / "main.swift")
++    args = [swiftc, "-O", "-swift-version", "5", "-o", str(work / "driver")]
++    if sys.platform != "darwin":   # no zlib module on Linux: describe the system header
++        mod = work / "zlibmod"
++        mod.mkdir()
++        (mod / "module.modulemap").write_text('module zlib [system] {\n header "/usr/include/zlib.h"\n link "z"\n export *\n}\n')
++        args += ["-I", str(mod)]
++    args += [str(p) for p in sorted(src.glob("*.swift"))]
++    r = subprocess.run(args, capture_output=True, text=True)
++    if r.returncode:
++        print(r.stdout[-3000:], r.stderr[-6000:])
++        sys.exit("FAIL: the Swift sources did not compile")
++    return work / "driver"
++
++
++def sha1(b):
++    return hashlib.sha1(b).hexdigest()
++
++
++def make_save(root: Path):
++    """A save folder with the shapes that matter: tiny, empty, nested, unicode, and bigger than a chunk."""
++    files = {
++        "slot1.sav": os.urandom(5000),
++        "empty.bin": b"",
++        "Profiles/main/profile.dat": os.urandom(100_000),
++        "Profiles/zz/ünïcode-名前.sav": b"unicode name " * 100,
++        "big/world.dat": os.urandom(2_500_000) + b"\0" * 700_000,        # spans 4 chunks, has compressible tail
++        "exactly-one-chunk.bin": os.urandom(1024 * 1024),
++        "Alpha.txt": b"sorting is case-insensitive",
++    }
++    for rel, data in files.items():
++        p = root / rel
++        p.parent.mkdir(parents=True, exist_ok=True)
++        p.write_bytes(data)
++    return files
++
++
++def legendary_modules():
++    sys.path.insert(0, str(LEG))
++    crypto = types.ModuleType("Cryptodome")
++    cipher = types.ModuleType("Cryptodome.Cipher")
++    cipher.AES = None
++    sys.modules.update({"Cryptodome": crypto, "Cryptodome.Cipher": cipher})
++    from legendary.models.chunk import Chunk
++    from legendary.models.manifest import Manifest
++    from legendary.utils.rolling_hash import get_hash
++    from legendary.utils.savegame_helper import SaveGameHelper
++    return Chunk, Manifest, get_hash, SaveGameHelper
++
++
++def main():
++    work = Path(tempfile.mkdtemp(prefix="epic-cloud-check-"))
++    try:
++        driver = build(work)
++        r = subprocess.run([str(driver), "selftest"], capture_output=True, text=True)
++        print(r.stdout.rstrip())
++        check(r.returncode == 0, "selftest")
++
++        if not (LEG / "legendary" / "models" / "chunk.py").exists():
++            print(f"SKIP: Legendary not found in {LEG}; set LEGENDARY_SRC for the round-trip checks")
++            return
++        Chunk, Manifest, get_hash, SaveGameHelper = legendary_modules()
++        app, acct, folder = "TestApp", "0123456789abcdef0123456789abcdef", "{AppData}/Test/Saved"
++
++        # 2. Swift writes, Legendary reads
++        src, cloud = work / "device", work / "cloud"
++        files = make_save(src)
++        r = subprocess.run([str(driver), "pack", str(src), str(cloud), app, acct, folder, "2026.10.15-12.30.45"], capture_output=True, text=True)
++        print(r.stdout.strip(), r.stderr.strip())
++        check(r.returncode == 0, "driver packed a save")
++        game = cloud / acct / "savesync" / app
++        manifests = sorted((game / "manifests").glob("*.manifest"))
++        check(len(manifests) == 1 and manifests[0].name == "2026.10.15-12.30.45.manifest", "one manifest, named by its build version")
++        m = Manifest.read_all(manifests[0].read_bytes())
++        check(m.meta.app_name == app + acct, "manifest app name is app + account (as Legendary writes it)")
++        check(m.meta.build_version == "2026.10.15-12.30.45", "build version")
++        check(m.custom_fields["CloudSaveFolder"] == folder, "CloudSaveFolder custom field")
++        check(len(m.file_manifest_list.elements) == len(files), f"manifest lists {len(files)} files")
++        chunks = {}
++        for ci in m.chunk_data_list.elements:
++            blob = (game / ci.path).read_bytes()
++            check(len(blob) == ci.file_size, f"chunk {ci.path[-20:]} file size matches the manifest")
++            c = Chunk.read_buffer(blob)
++            data = c.data
++            ok = (len(data) == 1024 * 1024 and c.guid == ci.guid and c.hash == ci.hash == get_hash(data)
++                  and c.sha_hash == ci.sha_hash == hashlib.sha1(data).digest() and ci.window_size == len(data))
++            check(ok, f"chunk {ci.guid_str[:8]}: guid, rolling hash, SHA-1 and size agree")
++            chunks[c.guid_num] = data
++        for fm in m.file_manifest_list.elements:
++            got = b"".join(chunks[cp.guid_num][cp.offset:cp.offset + cp.size] for cp in fm.chunk_parts)
++            want = files[fm.filename]
++            check(got == want and fm.hash == hashlib.sha1(want).digest() and fm.file_size == len(want),
++                  f"file {fm.filename!r} comes back byte for byte, hash and size right")
++        check(sorted(fm.filename for fm in m.file_manifest_list.elements) == sorted(files),
++              "the manifest names exactly the files that were saved")
++        names = [fm.filename for fm in m.file_manifest_list.elements]
++        check(names == sorted(names, key=str.casefold), "files are in Legendary's case-insensitive order")
++        # round trip through Legendary's own serializer: it must accept what we wrote
++        again = Manifest.read_all(m.write())
++        check(len(again.file_manifest_list.elements) == len(files), "Legendary can re-serialise and re-read the manifest")
++
++        # 3. Legendary writes, Swift reads
++        dev2, cloud2, back = work / "device2", work / "cloud2", work / "backup2"
++        files2 = make_save(dev2)
++        sgh = SaveGameHelper()
++        from datetime import datetime
++        packed = sgh.package_savegame(str(dev2), app, acct, folder, "", None, None, datetime(2026, 10, 14, 8, 0, 0))
++        game2 = cloud2 / acct / "savesync" / app
++        for rel, fp in packed.items():
++            t = game2 / rel
++            t.parent.mkdir(parents=True, exist_ok=True)
++            t.write_bytes(fp.read())
++        dest = work / "restored"
++        (dest / "slot1.sav").parent.mkdir(parents=True)
++        (dest / "slot1.sav").write_bytes(b"older local copy")
++        r = subprocess.run([str(driver), "fetch", str(cloud2), str(dest), str(back), app, acct], capture_output=True, text=True)
++        print(r.stdout.strip(), r.stderr.strip())
++        check(r.returncode == 0, "driver downloaded Legendary's snapshot")
++        same = all((dest / rel).read_bytes() == data for rel, data in files2.items())
++        check(same, f"all {len(files2)} files restored byte for byte")
++        check((back / "slot1.sav").read_bytes() == b"older local copy", "the file it replaced was backed up first")
++        check(int((dest / "slot1.sav").stat().st_mtime) == int(datetime(2026, 10, 14, 8, 0, 0).replace(tzinfo=__import__("datetime").timezone.utc).timestamp()),
++              "restored files take the snapshot's date")
++
++        # 3b. a damaged chunk must stop the download before anything is written
++        victim = next((game2 / "ChunksV4").rglob("*.chunk"))
++        victim.write_bytes(victim.read_bytes()[:-50])
++        dest3 = work / "restored3"
++        r = subprocess.run([str(driver), "fetch", str(cloud2), str(dest3), str(work / "b3"), app, acct], capture_output=True, text=True)
++        check(r.returncode != 0 and not dest3.exists(), "a damaged chunk aborts the download and writes nothing")
++    finally:
++        shutil.rmtree(work, ignore_errors=True)
++    print("ALL OK" if failures == 0 else f"{failures} FAILED")
++    sys.exit(1 if failures else 0)
++
++
++if __name__ == "__main__":
++    main()
+diff -ruN a/tests/host/epic-cloud/main.swift b/tests/host/epic-cloud/main.swift
+--- a/tests/host/epic-cloud/main.swift	1970-01-01 01:00:00.000000000 +0100
++++ b/tests/host/epic-cloud/main.swift	2026-10-15 18:57:18.149240857 +0200
+@@ -0,0 +1,126 @@
++// Host driver for tests/host/check-epic-cloud.py: runs the production EpicCloudSaves.swift against a
++// directory standing in for Epic's datastorage service.
++//
++//   driver selftest
++//   driver pack  SRC CLOUD APP ACCOUNT FOLDER [YYYY.MM.dd-HH.mm.ss]   upload SRC as a new snapshot
++//   driver fetch CLOUD DEST BACKUP APP ACCOUNT                         download the newest snapshot
++
++import Foundation
++
++struct DirTransport: EpicCloudTransport {
++    var root: URL
++    var prefix: String   // remote folder of the game, e.g. "ACC/savesync/APP"
++
++    func list(app: String) async throws -> [EpicCloudObject] {
++        let base = root.appendingPathComponent(prefix)
++        guard let walker = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
++        var out = [EpicCloudObject]()
++        for case let url as URL in walker where (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
++            let rel = String(url.path.dropFirst(base.path.count + 1))
++            out.append(EpicCloudObject(path: prefix + "/" + rel, readLink: url.path, writeLink: nil))
++        }
++        return out.sorted { $0.path < $1.path }
++    }
++    func read(_ object: EpicCloudObject) async throws -> Data { try Data(contentsOf: URL(fileURLWithPath: object.readLink!)) }
++    func writeTargets(app: String, paths: [String]) async throws -> [EpicCloudObject] {
++        paths.map { EpicCloudObject(path: $0, readLink: nil, writeLink: root.appendingPathComponent(prefix + "/" + $0).path) }
++    }
++    func write(_ object: EpicCloudObject, data: Data) async throws {
++        let url = URL(fileURLWithPath: object.writeLink!)
++        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
++        try data.write(to: url)
++    }
++}
++
++var failures = 0
++func check(_ ok: Bool, _ what: String) {
++    print(ok ? "ok   " : "FAIL ", what)
++    if !ok { failures += 1 }
++}
++
++func selftest() {
++    // the decision table
++    typealias V = EpicSaveVerdict
++    let a = ["s1": "aa"], b = ["s1": "bb"], c = ["s1": "cc"]
++    let base = EpicSaveBaseline(device: a, cloud: a, snapshot: "x")
++    check(EpicSavePlanner.decide(device: [:], cloud: nil, baseline: nil) == V.empty, "nothing anywhere: empty")
++    check(EpicSavePlanner.decide(device: a, cloud: a, baseline: nil) == V.inSync, "same without a record: in sync")
++    check(EpicSavePlanner.decide(device: [:], cloud: a, baseline: nil) == V.download, "empty device, cloud has saves: download")
++    check(EpicSavePlanner.decide(device: a, cloud: nil, baseline: nil) == V.upload, "no cloud save yet: upload")
++    check(EpicSavePlanner.decide(device: a, cloud: b, baseline: nil) == V.conflict, "differ, no record: conflict")
++    check(EpicSavePlanner.decide(device: a, cloud: b, baseline: base) == V.download, "only the cloud changed: download")
++    check(EpicSavePlanner.decide(device: b, cloud: a, baseline: base) == V.upload, "only the device changed: upload")
++    check(EpicSavePlanner.decide(device: b, cloud: c, baseline: base) == V.conflict, "both changed: conflict")
++    check(EpicSavePlanner.decide(device: a, cloud: nil, baseline: base) == V.inSync, "cloud emptied elsewhere: left alone")
++    check(EpicSavePlanner.decide(device: b, cloud: nil, baseline: base) == V.upload, "cloud emptied, device changed: upload")
++    let extra = EpicSaveBaseline(device: ["s1": "aa", "local": "zz"], cloud: a, snapshot: "x")
++    check(EpicSavePlanner.decide(device: ["s1": "aa", "local": "zz"], cloud: a, baseline: extra) == V.inSync, "device extras recorded by a download stay in sync")
++
++    // filters (utils/savegame_helper.py _filename_matches)
++    check(EpicSaveConfig.matches("Saves/slot1.sav", ["*.sav"]), "glob matches")
++    check(EpicSaveConfig.matches("Saves/slot1.sav", ["Saves/"]), "directory prefix matches")
++    check(EpicSaveConfig.matches("a/b/config.ini", ["config.ini"]), "suffix matches")
++    check(!EpicSaveConfig.matches("a/b/other.txt", ["*.sav", "Saves/"]), "no match")
++    let inc = EpicSaveConfig(folder: "x", include: ["*.sav"], exclude: [])
++    let exc = EpicSaveConfig(folder: "x", include: [], exclude: ["*.log"])
++    check(inc.includes("a.sav") && !inc.includes("a.log"), "include list")
++    check(exc.includes("a.sav") && !exc.includes("a.log"), "exclude list")
++    let attrs: [String: Any] = ["CloudSaveFolder": ["value": "{AppData}/Game/Saved"], "CloudIncludeList": ["value": "*.sav, *.dat"]]
++    let cfg = EpicSaveConfig.from(customAttributes: attrs)
++    check(cfg?.folder == "{AppData}/Game/Saved" && cfg?.include == ["*.sav", "*.dat"], "customAttributes parsed")
++    check(EpicSaveConfig.from(customAttributes: ["Other": ["value": "x"]]) == nil, "no CloudSaveFolder: no cloud saves")
++
++    // save folder variables
++    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("epic-cloud-paths-\(getpid())")
++    let drive = tmp.appendingPathComponent("drive_c"), user = drive.appendingPathComponent("users/steamuser")
++    try? FileManager.default.createDirectory(at: user.appendingPathComponent("AppData/Local/MyGame"), withIntermediateDirectories: true)
++    defer { try? FileManager.default.removeItem(at: tmp) }
++    let paths = EpicSavePaths(drive: drive, userFolder: user, installFolder: drive.appendingPathComponent("Program Files/Epic Games/G"), accountID: "ACC123")
++    check(paths.resolve("{AppData}/mygame/Saved")?.path.hasSuffix("users/steamuser/AppData/Local/MyGame/Saved") == true, "{AppData} resolves, case-insensitively")
++    check(paths.resolve("{UserDir}\\Games\\{EpicID}")?.path.hasSuffix("users/steamuser/Documents/Games/ACC123") == true, "{UserDir} and {EpicID}")
++    check(paths.resolve("{UserSavedGames}/G")?.path.hasSuffix("users/steamuser/Saved Games/G") == true, "{UserSavedGames}")
++    check(paths.resolve("{InstallDir}/Saves")?.path.hasSuffix("Epic Games/G/Saves") == true, "{InstallDir}")
++    check(paths.resolve("{AppData}/../Roaming/G")?.path.hasSuffix("users/steamuser/AppData/Roaming/G") == true, "{AppData}/../Roaming stays inside the prefix")
++    check(paths.resolve("{AppData}/../../../../../../../etc") == nil, "a path leaving drive_c is refused")
++    check(paths.resolve("{Nonsense}/x") == nil && paths.resolve("C:/x") == nil, "unknown variables and absolute paths are refused")
++
++    // chunk and hash basics
++    check(EpicSaveWriter.rollingHash(Data()) == 0, "rolling hash of nothing is 0")
++    let sample = Data("hello epic".utf8)
++    if let built = try? EpicSaveWriter.chunk(sample, guid: [1, 2, 3, 4]) {
++        check(built.file.count > 66 && built.path.hasPrefix("ChunksV4/"), "chunk file built (\(built.file.count) bytes, \(built.path))")
++        let parsed = try? EpicChunk.parse(built.file)
++        check(parsed?.count == EpicSaveWriter.chunkSize && parsed?.prefix(sample.count) == sample, "the reader inflates it back, padded to 1 MiB")
++    } else { check(false, "chunk built") }
++}
++
++func run() async throws {
++    let args = CommandLine.arguments
++    guard args.count >= 2 else { print("usage"); exit(2) }
++    switch args[1] {
++    case "selftest":
++        selftest()
++        print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
++        exit(failures == 0 ? 0 : 1)
++    case "pack":
++        let src = URL(fileURLWithPath: args[2]), cloud = URL(fileURLWithPath: args[3]), app = args[4], account = args[5], folder = args[6]
++        let date = args.count > 7 ? EpicCloudSaves.date(ofBuildVersion: args[7]) ?? Date() : Date()
++        let config = EpicSaveConfig(folder: folder, include: [], exclude: [])
++        let saves = try EpicSaveScan.scan(src, config: config)
++        let transport = DirTransport(root: cloud, prefix: "\(account)/savesync/\(app)")
++        let result = try await EpicCloudSaves.upload(saves, app: app, accountID: account, config: config, transport: transport, date: date)
++        print("packed \(result.files) files as \(result.version)")
++    case "fetch":
++        let cloud = URL(fileURLWithPath: args[2]), dest = URL(fileURLWithPath: args[3]), backup = URL(fileURLWithPath: args[4])
++        let app = args[5], account = args[6]
++        let transport = DirTransport(root: cloud, prefix: "\(account)/savesync/\(app)")
++        guard let (snapshot, all) = try await EpicCloudSaves.latest(app: app, transport: transport) else { print("no snapshot"); exit(3) }
++        let result = try await EpicCloudSaves.download(snapshot, all: all, into: dest, backup: backup, transport: transport)
++        print("fetched \(result.files) files from \(snapshot.buildVersion), \(result.backedUp) backed up")
++    default:
++        print("unknown command"); exit(2)
++    }
++}
++
++Task { do { try await run() } catch { print("ERROR: \(error)"); exit(1) }; exit(0) }
++RunLoop.main.run()

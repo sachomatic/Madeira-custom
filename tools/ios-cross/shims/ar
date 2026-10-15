@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# GNU ar writes archives of Mach-O objects without a usable symbol table; llvm-ar is what Apple's tools are.
+. "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
+exec "$(llvm_tool ar)" "$@"

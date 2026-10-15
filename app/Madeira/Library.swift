@@ -257,6 +257,11 @@ struct LibraryEntry: Codable, Identifiable {
     /// through Valve's client, with Steam's default launch option.
     /// `relativePath` is then its install folder, relative to drive_c.
     var steamAppID: Int?
+    /// Epic's installed app and public art; optional for older library files.
+    var epicAppName: String?
+    var epicLaunchCommand: String?
+    var epicArtworkURL: URL?
+    var epicHeroURL: URL?
     /// How a Steam game starts (Game details › Steam › Start with): nil is Madeira
     /// Dock, the default; "game" is the game's own program in Wine, without Steam
     /// (SteamDirectStart).
@@ -745,7 +750,8 @@ final class LibraryModel: ObservableObject {
         // A Steam game has one entry: a details page opened before its card first saved
         // one (refreshSteamMetadata) updates that entry.
         if let i = next.firstIndex(where: { $0.id == entry.id }) ??
-            next.firstIndex(where: { entry.steamAppID != nil && $0.steamAppID == entry.steamAppID }) {
+            next.firstIndex(where: { entry.steamAppID != nil && $0.steamAppID == entry.steamAppID }) ??
+            next.firstIndex(where: { entry.epicAppName != nil && $0.epicAppName == entry.epicAppName }) {
             // A details sheet may predate an asynchronous metadata refresh.
             if (next[i].metadataChecked ?? .distantPast) > (entry.metadataChecked ?? .distantPast) {
                 entry.folderBytes = next[i].folderBytes; entry.graphicsAPI = next[i].graphicsAPI
@@ -1617,6 +1623,8 @@ struct LibraryArtwork: View {
                let image = UIImage(contentsOfFile: LibraryModel.documents.appendingPathComponent("madeira-art/" + URL(fileURLWithPath: name).lastPathComponent).path) {
                 Image(uiImage: image).resizable().scaledToFill()
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center).clipped()
+            } else if let url = backdrop ? (entry.epicHeroURL ?? entry.epicArtworkURL) : entry.epicArtworkURL {
+                EpicArtwork(url: url)
             } else if let id = entry.steamID ?? entry.steamAppID {   // a store match, else the Steam game itself
                 AsyncImage(url: backdrop ? SteamCatalog.hero(id) : SteamCatalog.cover(id)) { image in
                     image.resizable().scaledToFill()
@@ -1872,6 +1880,8 @@ struct AmbientGlow: View {
 enum AmbientArt {
     case steam(Int)
     case library(LibraryEntry)
+    /// An Epic game's box art (Epic/EpicLibraryViews.swift).
+    case epic(URL?)
 }
 
 /// A grid card's artwork frame and what its glow is made of, reported up to the
@@ -1948,9 +1958,13 @@ enum AmbientArtwork {
             if let name = entry.coverFile {
                 image = UIImage(contentsOfFile: LibraryModel.documents
                     .appendingPathComponent("madeira-art/" + URL(fileURLWithPath: name).lastPathComponent).path)
+            } else if let url = entry.epicArtworkURL {
+                image = await fetch(url)
             } else if let id = entry.steamID ?? entry.steamAppID, let url = SteamCatalog.cover(id) {
                 image = await fetch(url)
             }
+        case .epic(let url):
+            if let url { image = await fetch(url) }
         }
         guard let image, image.size.width > 0 else { return nil }
         let size = CGSize(width: 96, height: (96 * image.size.height / image.size.width).rounded())
@@ -2315,7 +2329,8 @@ struct LibraryGroupedGames<LocalCell: View>: View {
         var steamEntries: [Int: (position: Int, entry: LibraryEntry)] = [:]
         for (position, entry) in library.entries.enumerated() where entry.desktop != true {
             if let appID = entry.steamAppID { steamEntries[appID] = (position, entry) }
-            else if query.isEmpty || entry.title.localizedCaseInsensitiveContains(query) {
+            // Installed Epic games are listed by the Epic Games section (Epic/).
+            else if entry.epicAppName == nil, query.isEmpty || entry.title.localizedCaseInsensitiveContains(query) {
                 result.entries[entry.id] = entry
                 result.games.append(LibraryGrouping.Game(entry: entry, position: position))
             }
@@ -2451,7 +2466,7 @@ struct LibraryView: View {
     @ObservedObject private var steamLibrary = SteamOwnedLibrary.shared
     private var entries: [LibraryEntry] {
         // Steam games are listed in their own section (SteamGames.swift).
-        let visible = model.entries.filter { $0.desktop != true && $0.steamAppID == nil && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) }
+        let visible = model.entries.filter { $0.desktop != true && $0.steamAppID == nil && $0.epicAppName == nil && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) }
         if sort == "added" { return visible.reversed() }
         return visible.sorted {
             if sort == "played", $0.lastPlayed != $1.lastPlayed { return ($0.lastPlayed ?? .distantPast) > ($1.lastPlayed ?? .distantPast) }
@@ -2606,6 +2621,9 @@ struct LibraryView: View {
                 SteamSettingsSection(open: { settingsSheet = $0 })
             }
             if settingsShow(".NET", "Mono", "Wine Mono", "framework", "download") { WineMonoSettingsSection() }
+            if settingsShow("Epic", "Epic Games", "sign in", "account") {
+                EpicSettingsSection(open: { settingsSheet = $0 })
+            }
             if settingsShow("saves", "backup", "restore", "save games") { SavesSection() }
             if settingsShow("appearance", "liquid metal", "metal", "glass") {
                 Section {
@@ -2656,6 +2674,7 @@ struct LibraryView: View {
             switch sheet {
             case .allSettings: AllSettingsView()
             case .steamSignIn: SteamSignInView()
+            case .epicSignIn: EpicSignInView()
             case .dock: MadeiraDockView(start: startDock)
             }
         }
@@ -2730,18 +2749,23 @@ struct LibraryView: View {
                         SteamGamesSection(search: search, layout: layout, sort: sort, width: viewport.size.width,
                                           part: steamFirst ? .notInstalled : .all, open: { selected = $0 })
                     }
-                } else if model.entries.filter({ $0.desktop != true && $0.steamAppID == nil }).isEmpty {
-                    ContentUnavailableView("Make yourself at home", systemImage: "gamecontroller", description: Text("Copy a game's folder into Madeira › wine › drive_c with the Files app, then tap + and choose its .exe."))
+                } else if model.entries.filter({ $0.desktop != true && $0.steamAppID == nil && $0.epicAppName == nil }).isEmpty {
+                    if !EpicGamesSection.shown {
+                        ContentUnavailableView("Make yourself at home", systemImage: "gamecontroller", description: Text("Copy a game's folder into Madeira › wine › drive_c with the Files app, then tap + and choose its .exe."))
+                    }
                 } else {
                     cells(entries, width: viewport.size.width)
                 }
                 }
+                // The account's Epic games, after Steam's and the games you added, under
+                // every Group by choice (Epic/).
+                EpicGamesSection(search: search, layout: layout, width: viewport.size.width, open: { selected = $0 })
             }
             // Ambient light behind the grid cards, in the content's own space so it scrolls with them.
             .backgroundPreferenceValue(AmbientGlowKey.self) { AmbientGlowLayer(items: $0) }
             .padding(16).frame(maxWidth: 1100).frame(maxWidth: .infinity)
         }
-        .refreshable { await SteamGamesSection.refresh() }
+        .refreshable { await SteamGamesSection.refresh(); await EpicGamesSection.refresh() }
         .onReceive(controller.commands) { command in
             guard tab == 0, selected == nil, !browser, !onboarding.presented else { return }
             let items = focusOrder
@@ -2911,6 +2935,14 @@ struct LibraryDetail: View {
     /// controls read and write them; the entry fields upstream keeps for the
     /// same options (avx, reportNVIDIA, config) are moved into them once.
     private func reloadBCD() { bcd = BCDGameValues(windowsPath: entry.windowsPath) }
+    /// This game's config lines, as the Memory section and the config editor edit them:
+    /// kept in bcd and written to the game's GameProfiles.swift file.
+    private var gameConfigBinding: Binding<String> {
+        Binding(get: { bcd.configText }, set: { text in
+            bcd.configText = text
+            GameProfile(windowsPath: entry.windowsPath).text = text
+        })
+    }
     private func migrateEntryOptions() {
         let path = entry.windowsPath
         let file = GameProfile(windowsPath: path)
@@ -3030,6 +3062,12 @@ struct LibraryDetail: View {
                     SteamCloudSection(appID: appID)
                     SteamEntrySection(entry: $entry) { leaving = true; dismiss() }
                 }
+                // An installed Epic game's version, prerequisites and Uninstall (Epic/).
+                if let epic = entry.epicAppName {
+                    EpicEntrySection(appName: epic, run: { prerequisite in leaving = true; play(prerequisite) },
+                                     leave: { leaving = true; dismiss() })
+                    EpicCloudSection(appName: epic)
+                }
                 Section {
                     // The Windows screen the game renders for (and the Desktop's size).
                     // ml1172: this device's choices (ResolutionChoices), grouped.
@@ -3100,7 +3138,7 @@ struct LibraryDetail: View {
                     }
                 }
                 // A Steam game starts with Steam's own launch option through Madeira Dock.
-                if entry.desktop != true && entry.steamAppID == nil {
+                if entry.desktop != true && entry.steamAppID == nil && entry.epicAppName == nil {
                     Section {
                         TextField("Launch arguments", text: $entry.arguments, axis: .vertical)
                             .font(.body.monospaced()).lineLimit(1...4)
@@ -3181,6 +3219,7 @@ struct LibraryDetail: View {
                         Text("Keyboard and mouse: for games without controller support. The controller presses keys and moves the mouse (left stick WASD, right stick mouse, triggers click, D-pad arrows, Start Esc, Select Tab) and the game sees no controller. Change what each button does under Controller binds, here or in the in-game menu.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                GameMemorySettings(config: gameConfigBinding)
                 // madeira-bcd: this game's config is its own GameProfiles.swift file
                 // (Application Support/GameConfigs/<hash>.cfg), the file every launch of
                 // the game exports as MADEIRA_CFG_GAME. Lines an entry saved in upstream's
@@ -3299,14 +3338,33 @@ struct BCDGameValues {
 /// launch exports as MADEIRA_CFG_GAME (BCDLaunch, MadeiraConfig.applyGame).
 struct LibraryGameConfigEditor: View {
     @Binding var text: String
+
+    /// The line being typed: the text after the last newline.
+    private var lastLine: String {
+        text.split(separator: "\n", omittingEmptySubsequences: false).last.map(String.init) ?? ""
+    }
+    /// What autocomplete completes: a key being typed, not yet followed by "=" and not a comment.
+    private var typedKey: String {
+        let l = lastLine.trimmingCharacters(in: .whitespaces)
+        return l.contains("=") || l.hasPrefix("#") ? "" : l
+    }
+    private func complete(with key: String) {
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if lines.isEmpty { lines = [""] }
+        lines[lines.count - 1] = key + " = "
+        text = lines.joined(separator: "\n")
+    }
+
     var body: some View {
         Form {
+            GameConfigOptionSearch(config: $text)
             Section {
+                ConfigKeySuggestions(typed: typedKey) { complete(with: $0.key) }
                 TextEditor(text: $text)
                     .font(.caption.monospaced()).frame(minHeight: 260)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
-            } footer: {
-                Text("One key = value per line, as in madeira.cfg; lines starting with # are comments. Examples: fence-chain = 6, dxmt = d3d11.mipClampBC=1, env.FEX_MULTIBLOCK = 1.")
+            } header: { Text("Lines") } footer: {
+                Text("One key = value per line, as in madeira.cfg; lines starting with # are comments. Start typing a key on a new line to get suggestions. Examples: fence-chain = 6, dxmt = d3d11.mipClampBC=1, env.FEX_MULTIBLOCK = 1.")
             }
         }
         .navigationTitle("This game's config").navigationBarTitleDisplayMode(.inline)
@@ -3420,6 +3478,8 @@ struct ControllerBindsPage: View {
                 } else {
                     pick(name, "Left click", .mouseLeft)
                     pick(name, "Right click", .mouseRight)
+                    pick(name, "Wheel up", .wheelUp)
+                    pick(name, "Wheel down", .wheelDown)
                     Menu("Letters") { ForEach(0x41...0x5A, id: \.self) { vk in pick(name, String(UnicodeScalar(UInt8(vk))), .key(Int32(vk))) } }
                     Menu("Numbers") { ForEach(0x30...0x39, id: \.self) { vk in pick(name, String(UnicodeScalar(UInt8(vk))), .key(Int32(vk))) } }
                     Menu("Function keys") { ForEach(0...11, id: \.self) { i in pick(name, "F\(i + 1)", .key(Int32(0x70 + i))) } }
@@ -3475,6 +3535,8 @@ struct ControllerBindsPage: View {
         case .none:            return input == "RS" ? "Mouse" : "Nothing"
         case .mouseLeft:       return "Left click"
         case .mouseRight:      return "Right click"
+        case .wheelUp:         return "Wheel up"
+        case .wheelDown:       return "Wheel down"
         case .joystickWASD:    return "WASD"
         case .joystickArrows:  return "Arrow keys"
         case .keyboardToggle:  return "Show keyboard"
@@ -3689,7 +3751,7 @@ struct MadeiraCredit: View {
 /// MADEIRA_RUNTIME_SETTINGS=0 hides this section.
 /// A sheet opened from Settings; LibraryView presents it from the Form itself.
 enum SettingsSheet: String, Identifiable {
-    case allSettings, steamSignIn, dock
+    case allSettings, steamSignIn, epicSignIn, dock
     var id: String { rawValue }
 }
 

@@ -58,6 +58,23 @@ event and then ignore the controller. Touch used as a
 trackpad and a hardware mouse are not affected. `env.MADEIRA_TOUCH_MOUSE = 1`
 always sends such touches, as before; `0` never does.
 
+Each control's panel in the editor starts with a **Size** slider (50-300 %, in
+5 % steps): the same per-control size the edit-mode pinch sets
+(`TouchControl.scale`), for any control, a WASD or Arrows stick included. A
+key stick's dead zone is a fixed share of its size, so a larger stick also
+needs a longer thumb travel before it presses a key. The layout's Control size
+multiplies it.
+
+The keyboard tab's first section also has **Wheel ↑** and **Wheel ↓**
+(`ControlAction.wheelUp`/`.wheelDown`, drawn "Whl↑"/"Whl↓"): one mouse-wheel
+notch (`MOUSEEVENTF_WHEEL`, ±120, the event a hardware mouse's wheel sends)
+on the press, then one every 0.1 s after a 0.4 s hold. The repeat stops on
+release, on entering the editor, when the control goes away and when the app
+resigns active. A wheel control can name a controller button for
+keyboard-and-mouse mode like any key, and the Controller binds page offers
+"Wheel up"/"Wheel down"; a physical button sends one notch per press. Layouts
+using them do not load in a build that predates them.
+
 ## Layouts
 
 While touch controls are shown, the landscape top bar has a layout button

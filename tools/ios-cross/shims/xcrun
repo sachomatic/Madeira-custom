@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# xcrun replacement for the Madeira build scripts on Linux.
+#   xcrun [-sdk|--sdk NAME] --show-sdk-path | -f TOOL | TOOL ARGS...
+# NAME iphoneos -> $IOS_SDK, macosx -> host marker dir (see _env.sh).
+. "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
+sdk=iphoneos; mode=run; tool=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -sdk|--sdk) sdk="$2"; shift 2 ;;
+        --show-sdk-path) mode=sdkpath; shift ;;
+        --show-sdk-version) mode=sdkver; shift ;;
+        -f|-find|--find) mode=find; tool="$2"; shift 2 ;;
+        -*) shift ;;                       # ignore other xcrun flags (--toolchain, -v, ...)
+        *) tool="$1"; shift; break ;;
+    esac
+done
+case "$mode" in
+    sdkpath)
+        case "$sdk" in
+            macosx*) mkdir -p "$HOST_SYSROOT"; echo "$HOST_SYSROOT" ;;
+            *) echo "$IOS_SDK" ;;
+        esac
+        exit 0 ;;
+    sdkver) basename "$(readlink -f "$IOS_SDK")" | sed 's/iPhoneOS//; s/\.sdk$//'; exit 0 ;;
+esac
+resolve() { # tool -> path to executable
+    case "$1" in
+        clang|cc) echo "$SHIMS_DIR/ios-clang" ;;
+        clang++|c++) echo "$SHIMS_DIR/ios-clang++" ;;
+        ar|ranlib|nm|strip|objcopy|objdump|readelf|size|lipo|install_name_tool|otool|dsymutil)
+            case "$1" in
+                install_name_tool) llvm_tool install-name-tool ;;
+                otool) llvm_tool otool ;;
+                *) llvm_tool "$1" ;;
+            esac ;;
+        libtool) echo "$SHIMS_DIR/libtool" ;;
+        codesign|sysctl) echo "$SHIMS_DIR/$1" ;;
+        metal|metallib|metal-ar|actool|ibtool) echo "$SHIMS_DIR/apple-only" ;;
+        *) command -v "$1" ;;
+    esac
+}
+p="$(resolve "$tool")" || exit 1
+[ -n "$p" ] || { echo "xcrun shim: unable to find utility \"$tool\"" >&2; exit 72; }
+if [ "$mode" = find ]; then echo "$p"; exit 0; fi
+case "$tool" in metal|metallib|actool|ibtool|metal-ar) exec "$p" "$tool" "$@" ;; esac
+exec "$p" "$@"

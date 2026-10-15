@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Stand-in for Apple compilers that only exist on macOS (metal, metallib, actool, ibtool).
+echo "shim: '$1' needs Apple's macOS toolchain and cannot run on Linux." >&2
+echo "      Reuse the official IPA's prebuilt output (PLAYBOOK section 5.1) or the" >&2
+echo "      macOS-runner hybrid (PLAYBOOK section 7)." >&2
+exit 69

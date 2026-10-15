@@ -1,0 +1,220 @@
+diff -ruN a/app/Madeira/ContentView.swift b/app/Madeira/ContentView.swift
+--- a/app/Madeira/ContentView.swift	2026-10-13 23:16:30.753571458 +0200
++++ b/app/Madeira/ContentView.swift	2026-10-13 23:16:30.772958333 +0200
+@@ -3637,6 +3637,8 @@
+     case key(Int32)          // Windows virtual-key code
+     case mouseLeft
+     case mouseRight
++    case wheelUp             // one mouse-wheel notch away from the user (+120), repeating while held
++    case wheelDown           // one notch toward the user (-120), repeating while held
+     case joystickWASD        // renders as a stick, posts W/A/S/D
+     case joystickArrows      // renders as a stick, posts the arrow keys
+     case keyboardToggle      // raises the iOS keyboard, as in portrait
+@@ -3661,6 +3663,14 @@
+         default:              return nil
+         }
+     }
++    /// MOUSEEVENTF_WHEEL delta of one notch for the wheel actions, nil otherwise.
++    var wheelDelta: Int32? {
++        switch self {
++        case .wheelUp:   return 120
++        case .wheelDown: return -120
++        default:         return nil
++        }
++    }
+     var isPad: Bool { if case .pad = self { return true }; return false }
+     var padName: String? { if case .pad(let name) = self { return name }; return nil }
+     var isPadStick: Bool { padName == "LS" || padName == "RS" }
+@@ -3718,6 +3728,8 @@
+         case .none:            return "—"
+         case .mouseLeft:       return "L"
+         case .mouseRight:      return "R"
++        case .wheelUp:         return "Whl↑"   // not "W↑": that reads as the W key
++        case .wheelDown:       return "Whl↓"
+         case .keyboardToggle:  return "⌨"
+         case .joystickWASD:    return "WASD"
+         case .joystickArrows:  return "↕"
+@@ -4172,6 +4184,9 @@
+     @State private var dragBase: CGPoint?
+     @State private var stickDir: Int = -1
+     @State private var padVector = CGSize.zero
++    /// Wheel buttons: one notch on the press, then a notch every 0.1 s after a
++    /// 0.4 s hold. Stopped on release, edit, removal and backgrounding.
++    @State private var wheelRepeat: Timer?
+ 
+     private var diameter: CGFloat { TouchControlsModel.diameter(control) }
+     private var size: CGSize { TouchControlsModel.size(control) }
+@@ -4304,8 +4319,12 @@
+                 }
+             }
+         }
+-        .onDisappear { if control.action.isPad { padVector = .zero; isDown = false } }
+-        .onChange(of: m.editing) { _, _ in if control.action.isPad { padVector = .zero; isDown = false } }
++        .onDisappear { if control.action.isPad { padVector = .zero; isDown = false }; stopWheel() }
++        .onChange(of: m.editing) { _, _ in if control.action.isPad { padVector = .zero; isDown = false }; stopWheel() }
++        // A wheel button never keeps scrolling while the app is not in front.
++        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
++            stopWheel()
++        }
+         .onChange(of: screen) { _, _ in if control.action.isPad { padVector = .zero; isDown = false } }
+         .onChange(of: control.action) { old, new in
+             if old.isPad || new.isPad { padVector = .zero; isDown = false }
+@@ -4390,6 +4409,16 @@
+             winios_pointer(0, 0, down ? 0x0002 : 0x0004, 0)   // LEFTDOWN / LEFTUP
+         case .mouseRight:
+             winios_pointer(0, 0, down ? 0x0008 : 0x0010, 0)   // RIGHTDOWN / RIGHTUP
++        case .wheelUp, .wheelDown:
++            stopWheel()
++            guard down, let delta = control.action.wheelDelta else { break }
++            winios_pointer(0, 0, 0x0800, UInt32(bitPattern: delta))   // MOUSEEVENTF_WHEEL
++            wheelRepeat = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { _ in
++                wheelRepeat = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
++                    guard isDown, !m.editing else { timer.invalidate(); return }
++                    winios_pointer(0, 0, 0x0800, UInt32(bitPattern: delta))
++                }
++            }
+         case .keyboardToggle:
+             if down { MetalBackedView.toggleKeyboard() }
+         case .none, .joystickWASD, .joystickArrows:
+@@ -4398,6 +4427,11 @@
+             break     // TouchPadSurface owns pad presses and cancellation.
+         }
+     }
++
++    private func stopWheel() {
++        wheelRepeat?.invalidate()
++        wheelRepeat = nil
++    }
+ }
+ 
+ /// ml645 — the mapping panel. Shown for the selected control in edit mode.
+@@ -4416,8 +4450,11 @@
+             }
+             Rectangle().fill(.white.opacity(0.15)).frame(height: 1)
+             ScrollView {
+-                (tab == 0 ? AnyView(keyboardTab) : AnyView(controllerTab))
+-                    .padding(10)
++                VStack(alignment: .leading, spacing: 12) {
++                    sizeRow
++                    tab == 0 ? AnyView(keyboardTab) : AnyView(controllerTab)
++                }
++                .padding(10)
+             }
+         }
+         .frame(width: layout.size.width, height: layout.size.height)
+@@ -4475,6 +4512,25 @@
+             size: size)
+     }
+ 
++    /// The control's own size, the same value the edit-mode pinch changes
++    /// (TouchControl.scale, 50-300 %), for a pinch that is hard to find or to
++    /// make precise. The layout's Control size multiplies it.
++    private var sizeRow: some View {
++        let scale = m.controls.first { $0.id == control.id }?.scale ?? control.scale
++        return HStack(spacing: 8) {
++            Text("Size")
++                .font(.system(size: 10, weight: .semibold))
++                .foregroundStyle(.white.opacity(0.45))
++            Slider(value: Binding(get: { scale },
++                                  set: { v in if let i = m.index(of: control.id) { m.controls[i].scale = (v * 20).rounded() / 20 } }),
++                   in: 0.5...3.0)
++            Text("\(Int((scale * 100).rounded())) %")
++                .font(.system(size: 11, weight: .medium).monospacedDigit())
++                .foregroundStyle(.white.opacity(0.75))
++                .frame(width: 44, alignment: .trailing)
++        }
++    }
++
+     private func tabButton(_ i: Int, _ icon: String) -> some View {
+         Button { tab = i } label: {
+             Image(systemName: icon)                       // stroke, not filled
+@@ -4508,6 +4564,7 @@
+             }
+             section("Pointer, sticks & special", [
+                 ("L click", .mouseLeft), ("R click", .mouseRight),
++                ("Wheel ↑", .wheelUp), ("Wheel ↓", .wheelDown),
+                 ("WASD", .joystickWASD), ("Arrows", .joystickArrows),
+                 ("Keyboard", .keyboardToggle), ("None", .none),
+             ])
+diff -ruN a/app/Madeira/Library.swift b/app/Madeira/Library.swift
+--- a/app/Madeira/Library.swift	2026-10-13 23:16:31.118493961 +0200
++++ b/app/Madeira/Library.swift	2026-10-13 23:16:31.134064092 +0200
+@@ -3296,6 +3296,8 @@
+                 } else {
+                     pick(name, "Left click", .mouseLeft)
+                     pick(name, "Right click", .mouseRight)
++                    pick(name, "Wheel up", .wheelUp)
++                    pick(name, "Wheel down", .wheelDown)
+                     Menu("Letters") { ForEach(0x41...0x5A, id: \.self) { vk in pick(name, String(UnicodeScalar(UInt8(vk))), .key(Int32(vk))) } }
+                     Menu("Numbers") { ForEach(0x30...0x39, id: \.self) { vk in pick(name, String(UnicodeScalar(UInt8(vk))), .key(Int32(vk))) } }
+                     Menu("Function keys") { ForEach(0...11, id: \.self) { i in pick(name, "F\(i + 1)", .key(Int32(0x70 + i))) } }
+@@ -3351,6 +3353,8 @@
+         case .none:            return input == "RS" ? "Mouse" : "Nothing"
+         case .mouseLeft:       return "Left click"
+         case .mouseRight:      return "Right click"
++        case .wheelUp:         return "Wheel up"
++        case .wheelDown:       return "Wheel down"
+         case .joystickWASD:    return "WASD"
+         case .joystickArrows:  return "Arrow keys"
+         case .keyboardToggle:  return "Show keyboard"
+diff -ruN a/app/Madeira/PadKeyboardMouse.swift b/app/Madeira/PadKeyboardMouse.swift
+--- a/app/Madeira/PadKeyboardMouse.swift	2026-10-13 23:16:31.970958609 +0200
++++ b/app/Madeira/PadKeyboardMouse.swift	2026-10-13 23:16:31.990421271 +0200
+@@ -204,6 +204,9 @@
+             winios_pointer(0, 0, down ? 0x0002 : 0x0004, 0)   // LEFTDOWN / LEFTUP
+         case .mouseRight:
+             winios_pointer(0, 0, down ? 0x0008 : 0x0010, 0)   // RIGHTDOWN / RIGHTUP
++        case .wheelUp, .wheelDown:
++            // One notch per press; a release sends nothing (a wheel has no "up").
++            if down, let delta = action.wheelDelta { winios_pointer(0, 0, 0x0800, UInt32(bitPattern: delta)) }
+         case .keyboardToggle:
+             if down { DispatchQueue.main.async { MetalBackedView.toggleKeyboard() } }
+         case .none, .joystickWASD, .joystickArrows, .pad:
+diff -ruN a/docs/CONTROLLERS.md b/docs/CONTROLLERS.md
+--- a/docs/CONTROLLERS.md	2026-10-13 23:16:32.681703628 +0200
++++ b/docs/CONTROLLERS.md	2026-10-13 23:16:32.697326811 +0200
+@@ -58,6 +58,23 @@
+ trackpad and a hardware mouse are not affected. `env.MADEIRA_TOUCH_MOUSE = 1`
+ always sends such touches, as before; `0` never does.
+ 
++Each control's panel in the editor starts with a **Size** slider (50-300 %, in
++5 % steps): the same per-control size the edit-mode pinch sets
++(`TouchControl.scale`), for any control, a WASD or Arrows stick included. A
++key stick's dead zone is a fixed share of its size, so a larger stick also
++needs a longer thumb travel before it presses a key. The layout's Control size
++multiplies it.
++
++The keyboard tab's first section also has **Wheel ↑** and **Wheel ↓**
++(`ControlAction.wheelUp`/`.wheelDown`, drawn "Whl↑"/"Whl↓"): one mouse-wheel
++notch (`MOUSEEVENTF_WHEEL`, ±120, the event a hardware mouse's wheel sends)
++on the press, then one every 0.1 s after a 0.4 s hold. The repeat stops on
++release, on entering the editor, when the control goes away and when the app
++resigns active. A wheel control can name a controller button for
++keyboard-and-mouse mode like any key, and the Controller binds page offers
++"Wheel up"/"Wheel down"; a physical button sends one notch per press. Layouts
++using them do not load in a build that predates them.
++
+ ## Layouts
+ 
+ While touch controls are shown, the landscape top bar has a layout button
+diff -ruN a/tests/host/check-control-presets.py b/tests/host/check-control-presets.py
+--- a/tests/host/check-control-presets.py	2026-10-13 23:16:32.279406672 +0200
++++ b/tests/host/check-control-presets.py	2026-10-13 23:16:32.302841446 +0200
+@@ -127,7 +127,16 @@
+ require(ControlAction.joystickArrows.stickGlyph == "arrow.up.and.down.and.arrow.left.and.right",
+         "the arrow-key stick's glyph is the arrows")
+ require(ControlAction.joystickWASD.stickGlyph != ControlAction.joystickArrows.stickGlyph, "WASD and Arrows differ")
+-let plain: [ControlAction] = [.none, .mouseLeft, .mouseRight, .keyboardToggle, .key(0x20), .pad("LS"), .pad("RS"), .pad("A")]
++let plain: [ControlAction] = [.none, .mouseLeft, .mouseRight, .wheelUp, .wheelDown, .keyboardToggle, .key(0x20), .pad("LS"), .pad("RS"), .pad("A")]
++// --- The wheel buttons: one notch each way, not sticks, not pad actions; they survive a round trip.
++require(ControlAction.wheelUp.wheelDelta == 120 && ControlAction.wheelDown.wheelDelta == -120,
++        "wheel up/down send one +120/-120 notch")
++require(plain.filter { $0.wheelDelta != nil } == [.wheelUp, .wheelDown], "only the wheel actions carry a wheel delta")
++require(ControlAction.wheelUp.stickKeys == nil && !ControlAction.wheelUp.isPad, "a wheel button is neither a stick nor a pad input")
++require(ControlAction.wheelUp.label != ControlAction.key(0x57).label, "the wheel's label does not read as the W key")
++let wheelData = try! JSONEncoder().encode([ControlAction.wheelUp, .wheelDown])
++require((try? JSONDecoder().decode([ControlAction].self, from: wheelData)) == [.wheelUp, .wheelDown],
++        "wheel actions encode and decode")
+ require(plain.allSatisfy { $0.stickGlyph == nil }, "no other control (nor the controller sticks) has a stick glyph")
+ require(ControlAction.joystickWASD.stickKeys == [0x57, 0x44, 0x53, 0x41]
+         && ControlAction.joystickArrows.stickKeys == [0x26, 0x27, 0x28, 0x25], "the glyph does not change the keys a stick posts")

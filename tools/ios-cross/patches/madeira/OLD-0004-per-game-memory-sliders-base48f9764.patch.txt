@@ -1,0 +1,261 @@
+diff -ruN a/app/Madeira/ConfigCatalog.swift b/app/Madeira/ConfigCatalog.swift
+--- a/app/Madeira/ConfigCatalog.swift	2026-10-14 21:31:24.525257213 +0200
++++ b/app/Madeira/ConfigCatalog.swift	2026-10-14 21:31:24.558182030 +0200
+@@ -36,6 +36,70 @@
+         return generated.map(\.category).filter { seen.insert($0).inserted }
+     }()
+     static let keys = Set(generated.map(\.key))
++
++    /// Options whose key, title, note or category contains `query` (case-insensitive).
++    static func search(_ query: String, limit: Int = .max) -> [ConfigOption] {
++        let q = query.trimmingCharacters(in: .whitespaces)
++        guard !q.isEmpty else { return [] }
++        return Array(generated.filter { o in
++            [o.key, o.title, o.note, o.category].contains { $0.localizedCaseInsensitiveContains(q) }
++        }.prefix(limit))
++    }
++
++    /// Autocomplete: options whose key starts with `typed` first, then those that
++    /// merely contain it in the key or title. The exact key itself is left out.
++    static func suggest(_ typed: String, limit: Int = 8) -> [ConfigOption] {
++        let t = typed.trimmingCharacters(in: .whitespaces).lowercased()
++        guard !t.isEmpty else { return [] }
++        let starts = generated.filter { $0.key.lowercased().hasPrefix(t) }
++        let contains = generated.filter {
++            !$0.key.lowercased().hasPrefix(t) && ($0.key.lowercased().contains(t) || $0.title.lowercased().contains(t))
++        }
++        return Array((starts + contains).filter { $0.key.lowercased() != t }.prefix(limit))
++    }
++}
++
++/// Reads and edits "key = value" lines in a plain text in madeira.cfg's syntax,
++/// such as a library game's own config (LibraryEntry.config). Comments and every
++/// other line are kept; setting a key drops its earlier lines (the last line wins).
++enum GameCfgText {
++    static func value(_ key: String, in text: String) -> String? { MadeiraConfig.parse(text)[key] }
++
++    static func setting(_ key: String, to value: String?, in text: String) -> String {
++        var lines = text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }).map(String.init)
++        while lines.last == "" { lines.removeLast() }
++        lines.removeAll { line in
++            let t = line.trimmingCharacters(in: .whitespaces)
++            guard !t.hasPrefix("#"), let eq = t.firstIndex(of: "=") else { return false }
++            return t[..<eq].trimmingCharacters(in: .whitespaces) == key
++        }
++        if let value { lines.append("\(key) = \(value)") }
++        return lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
++    }
++}
++
++/// A row of tappable option keys that complete what is being typed.
++struct ConfigKeySuggestions: View {
++    let typed: String
++    let pick: (ConfigOption) -> Void
++
++    var body: some View {
++        let hits = ConfigCatalog.suggest(typed)
++        if !hits.isEmpty {
++            ScrollView(.horizontal, showsIndicators: false) {
++                HStack(spacing: 8) {
++                    ForEach(hits) { option in
++                        Button { pick(option) } label: {
++                            Text(option.key).font(.caption.monospaced())
++                                .padding(.horizontal, 10).padding(.vertical, 6)
++                                .background(.thinMaterial, in: Capsule())
++                        }
++                        .buttonStyle(.plain)
++                    }
++                }
++            }
++        }
++    }
+ }
+ 
+ /// Settings › All settings: every catalogued option, editable in place.
+@@ -102,6 +166,7 @@
+                 Section {
+                     TextField("key, or env.NAME", text: $newKey)
+                         .textInputAutocapitalization(.never).autocorrectionDisabled().font(.body.monospaced())
++                    ConfigKeySuggestions(typed: newKey) { newKey = $0.key }
+                     TextField("value", text: $newValue)
+                         .textInputAutocapitalization(.never).autocorrectionDisabled().font(.body.monospaced())
+                     Button("Add to madeira.cfg") {
+@@ -228,3 +293,131 @@
+         .onChange(of: refresh) { _, _ in values = MadeiraConfig.all() }
+     }
+ }
++
++/// Game details › This game's config: find any catalogued option by name or
++/// description and set it with its own control. The values land in the game's
++/// own lines (the `config` text), never in madeira.cfg.
++struct GameConfigOptionSearch: View {
++    @Binding var config: String
++    @State private var query = ""
++    private static let limit = 25
++
++    private func binding(_ key: String) -> Binding<String?> {
++        Binding(get: { GameCfgText.value(key, in: config) }, set: { new in
++            let v = new?.trimmingCharacters(in: .whitespaces)
++            let stored = (v?.isEmpty ?? true) ? nil : v
++            guard stored != GameCfgText.value(key, in: config) else { return }
++            config = GameCfgText.setting(key, to: stored, in: config)
++        })
++    }
++
++    var body: some View {
++        let hits = ConfigCatalog.search(query)
++        Section {
++            TextField("Search options (swap, vram, sync, fex…)", text: $query)
++                .textInputAutocapitalization(.never).autocorrectionDisabled()
++            if !query.trimmingCharacters(in: .whitespaces).isEmpty && hits.isEmpty {
++                Text("No option matches \u{201C}\(query)\u{201D}.").foregroundStyle(.secondary)
++            }
++            ForEach(hits.prefix(Self.limit)) { ConfigOptionRow(option: $0, value: binding($0.key)) }
++        } header: { Text(hits.isEmpty ? "Find an option" : "Options (\(hits.count))") } footer: {
++            Text(hits.count > Self.limit ? "Showing \(Self.limit) of \(hits.count). Refine the search."
++                 : "A value set here is for this game only and wins over madeira.cfg. Swipe left on a row to reset it.")
++        }
++    }
++}
++
++/// Game details › Memory: this game's own swap tier, video memory and video
++/// budget trim, as sliders. They write swap-mb, env.MADEIRA_SWAP_COVERAGE,
++/// vram-mb and vram-trim-mb into the game's own config lines, which win over
++/// Settings › Memory & sync (the runtime reads the game's lines after madeira.cfg).
++struct GameMemorySettings: View {
++    @Binding var config: String
++
++    private struct SliderRow: View {
++        let title: String
++        let key: String
++        @Binding var config: String
++        let range: ClosedRange<Double>
++        let step: Double
++        let defaultValue: Int
++        let defaultText: String
++        let format: (Int) -> String
++
++        private var stored: Int? { GameCfgText.value(key, in: config).flatMap { Int($0) } }
++
++        var body: some View {
++            VStack(alignment: .leading, spacing: 4) {
++                HStack {
++                    Text(title)
++                    Spacer()
++                    Text(stored.map(format) ?? defaultText)
++                        .foregroundStyle(stored == nil ? .secondary : .primary).monospacedDigit()
++                    if stored != nil {
++                        Button("Reset") { config = GameCfgText.setting(key, to: nil, in: config) }
++                            .font(.caption).buttonStyle(.borderless)
++                    }
++                }
++                Slider(value: Binding(get: { Double(stored ?? defaultValue) }, set: { v in
++                    let i = Int(v.rounded())
++                    config = GameCfgText.setting(key, to: i == defaultValue ? nil : String(i), in: config)
++                }), in: range, step: step)
++            }
++        }
++    }
++
++    private static let coverageKey = "env.MADEIRA_SWAP_COVERAGE"
++    private var swapDefaultText: String {
++        let g = RuntimeMemorySyncSettings.intKey("swap-mb")
++        return g > 0 ? "Default (\(RuntimeMemorySyncSettings.gb(g)) from Settings)" : "Default (off)"
++    }
++    private var vramDefaultText: String {
++        let g = RuntimeMemorySyncSettings.intKey("vram-mb")
++        return g > 0 ? "Default (\(RuntimeMemorySyncSettings.gb(g)) from Settings)" : "Default (automatic)"
++    }
++    private static let gameKeys = ["swap-mb", coverageKey, "vram-mb", "vram-trim-mb"]
++
++    var body: some View {
++        Section {
++            SliderRow(title: "Swap tier", key: "swap-mb", config: $config, range: 0...8192, step: 512,
++                      defaultValue: 0, defaultText: swapDefaultText,
++                      format: { $0 == 0 ? "Off" : RuntimeMemorySyncSettings.gb($0) })
++            Picker("Swap coverage", selection: Binding(
++                get: { GameCfgText.value(Self.coverageKey, in: config) ?? "" },
++                set: { config = GameCfgText.setting(Self.coverageKey, to: $0.isEmpty ? nil : $0, in: config) })) {
++                Text("Default (from Settings)").tag("")
++                Text("Large allocations (8 MB+)").tag("classic")
++                ForEach(RuntimeMemorySyncSettings.coverageChoices.filter { !$0.0.isEmpty }, id: \.0) { Text($0.1).tag($0.0) }
++                if let v = GameCfgText.value(Self.coverageKey, in: config),
++                   !["", "classic"].contains(v), !RuntimeMemorySyncSettings.coverageChoices.contains(where: { $0.0 == v }) {
++                    Text(v).tag(v)
++                }
++            }
++            SliderRow(title: "Video memory", key: "vram-mb", config: $config, range: 0...6144, step: 256,
++                      defaultValue: 0, defaultText: vramDefaultText,
++                      format: { RuntimeMemorySyncSettings.gb($0) })
++            SliderRow(title: "Shrink video budget early", key: "vram-trim-mb", config: $config, range: 0...3072, step: 128,
++                      defaultValue: 1536, defaultText: "Default (1.5 GB)",
++                      format: { $0 == 0 ? "Never" : RuntimeMemorySyncSettings.gb($0) })
++            Button {
++                var t = config
++                t = GameCfgText.setting("swap-mb", to: "3072", in: t)
++                t = GameCfgText.setting(Self.coverageKey, to: "broad", in: t)
++                t = GameCfgText.setting("vram-mb", to: "1536", in: t)
++                config = t
++            } label: { Label("Heavy-game preset: 3 GB swap, broad coverage, 1.5 GB video", systemImage: "memorychip") }
++            if Self.gameKeys.contains(where: { GameCfgText.value($0, in: config) != nil }) {
++                Button("Clear this game's memory settings", role: .destructive) {
++                    var t = config
++                    for k in Self.gameKeys { t = GameCfgText.setting(k, to: nil, in: t) }
++                    config = t
++                }
++            }
++        } header: { Text("Memory") } footer: {
++            VStack(alignment: .leading, spacing: 4) {
++                Text("For a game that iOS closes for using too much memory. Swap tier moves game data to a file on this device's storage, up to the chosen size, at some speed cost; Broad coverage moves the most. Video memory is how much graphics memory the game is told it has: lower makes it keep less in memory. Shrink video budget early starts lowering that budget this far below the memory limit: higher is safer.")
++                Text("Swap coverage matters only while a swap tier is on, here or in Settings. These values are for this game only and win over Settings › Memory & sync. They are read when the game starts; if another game ran since Madeira opened, close Madeira from the app switcher first.")
++            }
++        }
++    }
++}
+diff -ruN a/app/Madeira/Library.swift b/app/Madeira/Library.swift
+--- a/app/Madeira/Library.swift	2026-10-14 21:31:24.537604019 +0200
++++ b/app/Madeira/Library.swift	2026-10-14 21:31:24.574644438 +0200
+@@ -3095,6 +3095,7 @@
+                         Text("Keyboard and mouse: for games without controller support. The controller presses keys and moves the mouse (left stick WASD, right stick mouse, triggers click, D-pad arrows, Start Esc, Select Tab) and the game sees no controller. Change what each button does under Controller binds, here or in the in-game menu.").font(.caption).foregroundStyle(.secondary)
+                     }
+                 }
++                GameMemorySettings(config: Binding(get: { entry.config ?? "" }, set: { entry.config = $0.isEmpty ? nil : $0 }))
+                 Section {
+                     NavigationLink {
+                         LibraryGameConfigEditor(text: Binding(get: { entry.config ?? "" }, set: { entry.config = $0.isEmpty ? nil : $0 }))
+@@ -3175,14 +3176,33 @@
+ /// (LibraryEntry.config, MadeiraConfig.applyGame).
+ struct LibraryGameConfigEditor: View {
+     @Binding var text: String
++
++    /// The line being typed: the text after the last newline.
++    private var lastLine: String {
++        text.split(separator: "\n", omittingEmptySubsequences: false).last.map(String.init) ?? ""
++    }
++    /// What autocomplete completes: a key being typed, not yet followed by "=" and not a comment.
++    private var typedKey: String {
++        let l = lastLine.trimmingCharacters(in: .whitespaces)
++        return l.contains("=") || l.hasPrefix("#") ? "" : l
++    }
++    private func complete(with key: String) {
++        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
++        if lines.isEmpty { lines = [""] }
++        lines[lines.count - 1] = key + " = "
++        text = lines.joined(separator: "\n")
++    }
++
+     var body: some View {
+         Form {
++            GameConfigOptionSearch(config: $text)
+             Section {
++                ConfigKeySuggestions(typed: typedKey) { complete(with: $0.key) }
+                 TextEditor(text: $text)
+                     .font(.caption.monospaced()).frame(minHeight: 260)
+                     .autocorrectionDisabled().textInputAutocapitalization(.never)
+-            } footer: {
+-                Text("One key = value per line, as in madeira.cfg; lines starting with # are comments. Examples: fence-chain = 6, dxmt = d3d11.mipClampBC=1, env.FEX_MULTIBLOCK = 1.")
++            } header: { Text("Lines") } footer: {
++                Text("One key = value per line, as in madeira.cfg; lines starting with # are comments. Start typing a key on a new line to get suggestions. Examples: fence-chain = 6, dxmt = d3d11.mipClampBC=1, env.FEX_MULTIBLOCK = 1.")
+             }
+         }
+         .navigationTitle("This game's config").navigationBarTitleDisplayMode(.inline)

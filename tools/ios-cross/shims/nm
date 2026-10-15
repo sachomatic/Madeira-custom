@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# GNU nm cannot read Mach-O objects; configure scripts (nettle: global symbol prefix) run `nm` on them.
+. "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
+exec "$(llvm_tool nm)" "$@"

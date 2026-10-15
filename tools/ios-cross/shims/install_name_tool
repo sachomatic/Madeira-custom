@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+. "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
+exec "$(llvm_tool install-name-tool)" "$@"

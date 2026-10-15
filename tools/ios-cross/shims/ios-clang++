@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+IOS_DRIVER=cxx exec "$(dirname "${BASH_SOURCE[0]}")/ios-clang" "$@"

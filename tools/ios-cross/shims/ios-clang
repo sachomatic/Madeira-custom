@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# clang / clang++ for arm64-apple-ios. Name decides the driver (ios-clang++ = C++).
+# - target is arm64-apple-ios$IOS_MIN, or the version of an explicit
+#   -miphoneos-version-min=X (which is then removed: clang would warn about a
+#   second deployment target)
+# - adds -isysroot $IOS_SDK unless the caller gave one
+# - if the caller's -isysroot is the host marker (from `xcrun --sdk macosx`),
+#   compile for the Linux host with gcc/g++ instead (CC_FOR_BUILD)
+. "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
+if [ "${IOS_DRIVER:-}" = cxx ]; then drv=clang++-20; host=g++; else drv=clang-20; host=gcc; fi
+unset IOS_DRIVER
+cl="$LLVM_BIN/$drv"; [ -x "$cl" ] || cl="$LLVM_BIN/${drv%-20}"
+min="$IOS_MIN"; have_sysroot=; host_mode=; out=(); prev=
+for a in "$@"; do
+    case "$a" in
+        -miphoneos-version-min=*) min="${a#*=}"; continue ;;
+    esac
+    if [ "$prev" = "-isysroot" ]; then
+        [ "$a" = "$HOST_SYSROOT" ] && host_mode=1; have_sysroot=1
+    fi
+    case "$a" in -isysroot=*|--sysroot=*) have_sysroot=1 ;; esac
+    out+=("$a"); prev="$a"
+done
+if [ -n "$host_mode" ]; then
+    args=(); skip=
+    for a in "${out[@]}"; do
+        if [ -n "$skip" ]; then skip=; continue; fi
+        case "$a" in
+            -isysroot|-arch|-target) skip=1; continue ;;
+            -mmacosx-version-min=*) continue ;;
+        esac
+        args+=("$a")
+    done
+    exec "$host" "${args[@]}"
+fi
+extra=(-target "arm64-apple-ios$min")
+# Link-only flags, and only when linking: configure scripts pass
+# -Werror=unused-command-line-argument, which would turn them into errors in
+# compile-only mode. -mlinker-version: without it clang emits
+# -iphoneos_version_min, which ld64.lld rejects.
+linking=1
+for a in "${out[@]}"; do case "$a" in -c|-S|-E|-fsyntax-only|-M|-MM) linking= ;; esac; done
+[ -z "$linking" ] || extra+=("--ld-path=$LLVM_BIN/ld64.lld" -mlinker-version=1000)
+[ -n "$have_sysroot" ] || extra+=(-isysroot "$IOS_SDK")
+# C++: use the SDK's libc++ headers only. Without this clang finds the Linux libc++ installed
+# next to it (/usr/lib/llvm-20/include/c++/v1, different __config_site) and compiles iOS code
+# against it: wrong ABI options, and it breaks -fmodules.
+if [ "$drv" = clang++-20 ]; then
+    extra+=(-nostdinc++ -isystem "$IOS_SDK/usr/include/c++/v1")
+fi
+exec "$cl" "${extra[@]}" "${out[@]}"

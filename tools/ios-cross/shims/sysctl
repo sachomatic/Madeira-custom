@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Only what the build scripts ask for: `sysctl -n hw.ncpu` (and hw.logicalcpu/hw.physicalcpu).
+for a in "$@"; do
+    case "$a" in
+        hw.ncpu|hw.logicalcpu|hw.physicalcpu|hw.activecpu) exec nproc ;;
+        hw.memsize) awk '/MemTotal/{print $2*1024}' /proc/meminfo; exit 0 ;;
+    esac
+done
+echo "sysctl shim: unsupported: $*" >&2; exit 1

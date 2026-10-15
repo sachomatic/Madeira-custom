@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Minimal codesign: `codesign [-f] [-s ID] [--entitlements FILE] [other flags] PATH...`
+# is turned into an ad-hoc `ldid -S[FILE] PATH`. Verify/display modes are not supported.
+ent=; paths=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --entitlements) ent="$2"; shift 2 ;;
+        --entitlements=*) ent="${1#*=}"; shift ;;
+        -s|--sign|-i|--identifier|-r|--requirements|--prefix|-o|--options|--timestamp=*|--preserve-metadata=*)
+            case "$1" in --timestamp=*|--preserve-metadata=*) shift ;; *) shift 2 ;; esac ;;
+        -v|-d|-D|-h|--verify|--display|--remove-signature) echo "codesign shim: $1 not supported" >&2; exit 1 ;;
+        -*) shift ;;
+        *) paths+=("$1"); shift ;;
+    esac
+done
+[ ${#paths[@]} -gt 0 ] || { echo "codesign shim: no path" >&2; exit 1; }
+ldid_bin="$(command -v ldid || echo "$HOME/tools/bin/ldid")"
+for p in "${paths[@]}"; do
+    if [ -n "$ent" ]; then "$ldid_bin" -S"$ent" "$p" || exit 1; else "$ldid_bin" -S "$p" || exit 1; fi
+done

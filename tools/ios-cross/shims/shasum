@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# macOS `shasum [-a ALG] files` -> coreutils shaNsum (default SHA-1, like the original).
+alg=1; args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -a) alg="$2"; shift 2 ;;
+        -a*) alg="${1#-a}"; shift ;;
+        *) args+=("$1"); shift ;;
+    esac
+done
+exec "sha${alg}sum" "${args[@]}"

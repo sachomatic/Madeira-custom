@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# llvm-lipo, except that its -info/-archs crash on static archives (.a): answer those ourselves.
+. "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
+real="$(llvm_tool lipo)"
+mode=; files=()
+for a in "$@"; do
+    case "$a" in -info|-archs) mode="$a" ;; -*) ;; *) files+=("$a") ;; esac
+done
+if [ -n "$mode" ]; then
+    rc=0
+    for f in "${files[@]}"; do
+        if [ "$(head -c 7 "$f" 2>/dev/null)" = '!<arch>' ]; then
+            m="$(mktemp -d)"; ( cd "$m" && "$(llvm_tool ar)" x "$(readlink -f "$f")" 2>/dev/null )
+            o="$(ls "$m"/*.o 2>/dev/null | head -1)"
+            a=arm64; [ -n "$o" ] && a="$("$real" -archs "$o" 2>/dev/null || echo arm64)"
+            rm -rf "$m"
+            if [ "$mode" = -info ]; then echo "Non-fat file: $f is architecture: $a"; else echo "$a"; fi
+        else
+            "$real" "$mode" "$f" || rc=$?
+        fi
+    done
+    exit $rc
+fi
+exec "$real" "$@"

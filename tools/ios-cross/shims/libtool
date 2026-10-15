@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Apple `libtool -static -o out.a in...` -> llvm-libtool-darwin (GNU libtool is not this).
+. "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
+exec "$(llvm_tool libtool-darwin)" "$@"

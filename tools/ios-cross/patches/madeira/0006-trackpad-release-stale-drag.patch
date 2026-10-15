@@ -1,0 +1,57 @@
+diff -ruN a/app/Madeira/ContentView.swift b/app/Madeira/ContentView.swift
+--- a/app/Madeira/ContentView.swift	2026-10-15 18:21:58.398458217 +0200
++++ b/app/Madeira/ContentView.swift	2026-10-15 18:21:58.406613017 +0200
+@@ -545,6 +545,20 @@
+     private func activeTouches(_ event: UIEvent?) -> [UITouch] {
+         (event?.allTouches ?? []).filter { $0.phase != .ended && $0.phase != .cancelled }
+     }
++    /// A long-press drag holds the left button until ITS finger lifts. If that finger's
++    /// end never reaches this view (a gate or the two-finger path consumed it), the drag
++    /// would stay armed for good: the button stays down and touchesMoved ignores every
++    /// other finger, so the pointer is dead (seen in a Frostpunk log: 25 "non-drag finger
++    /// up (drag continues)" and no "drag drop"). So a drag whose finger is gone is dropped
++    /// here, on the next touch event of any kind.
++    private func releaseStaleDrag(_ event: UIEvent?) {
++        guard dragActive else { return }
++        if let d = dragTouch, activeTouches(event).contains(d) { return }
++        fputs("[trackpad] stale drag released (its finger is gone)\n", stderr)
++        postPointer(F_LUP)
++        dragActive = false
++        dragTouch = nil
++    }
+ 
+     // Direct touches that began while TouchMouseGate was suppressing stay
+     // swallowed until they lift, so a change of the gate never leaves a button held.
+@@ -581,6 +595,7 @@
+             return
+         }
+         let now = Date().timeIntervalSinceReferenceDate
++        releaseStaleDrag(event)
+         let active = activeTouches(event)
+         touchGeneration += 1
+         if active.count >= 2 {
+@@ -627,6 +642,7 @@
+             winios_post_touch_move(x, y)
+             return
+         }
++        releaseStaleDrag(event)
+         let active = activeTouches(event)
+         if twoFingerActive {
+             guard active.count >= 2 else { return }
+@@ -718,13 +734,15 @@
+                     postPointer(F_RUP)
+                 }
+                 twoFingerActive = false
++                releaseStaleDrag(event)   // every finger is up: no drag can still be held
+             }
+             return
+         }
+         touchGeneration += 1   // cancel any pending long-press
+         if dragActive {
+             if let d = dragTouch, !touches.contains(d) {
+-                fputs("[trackpad] ended: non-drag finger up (drag continues)\n", stderr)
++                releaseStaleDrag(event)
++                if dragActive { fputs("[trackpad] ended: non-drag finger up (drag continues)\n", stderr) }
+                 return
+             }
+             fputs("[trackpad] ended: drag drop\n", stderr)

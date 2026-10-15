@@ -127,7 +127,16 @@ require(ControlAction.joystickWASD.stickGlyph == "keyboard", "the WASD stick's g
 require(ControlAction.joystickArrows.stickGlyph == "arrow.up.and.down.and.arrow.left.and.right",
         "the arrow-key stick's glyph is the arrows")
 require(ControlAction.joystickWASD.stickGlyph != ControlAction.joystickArrows.stickGlyph, "WASD and Arrows differ")
-let plain: [ControlAction] = [.none, .mouseLeft, .mouseRight, .keyboardToggle, .key(0x20), .pad("LS"), .pad("RS"), .pad("A")]
+let plain: [ControlAction] = [.none, .mouseLeft, .mouseRight, .wheelUp, .wheelDown, .keyboardToggle, .key(0x20), .pad("LS"), .pad("RS"), .pad("A")]
+// --- The wheel buttons: one notch each way, not sticks, not pad actions; they survive a round trip.
+require(ControlAction.wheelUp.wheelDelta == 120 && ControlAction.wheelDown.wheelDelta == -120,
+        "wheel up/down send one +120/-120 notch")
+require(plain.filter { $0.wheelDelta != nil } == [.wheelUp, .wheelDown], "only the wheel actions carry a wheel delta")
+require(ControlAction.wheelUp.stickKeys == nil && !ControlAction.wheelUp.isPad, "a wheel button is neither a stick nor a pad input")
+require(ControlAction.wheelUp.label != ControlAction.key(0x57).label, "the wheel's label does not read as the W key")
+let wheelData = try! JSONEncoder().encode([ControlAction.wheelUp, .wheelDown])
+require((try? JSONDecoder().decode([ControlAction].self, from: wheelData)) == [.wheelUp, .wheelDown],
+        "wheel actions encode and decode")
 require(plain.allSatisfy { $0.stickGlyph == nil }, "no other control (nor the controller sticks) has a stick glyph")
 require(ControlAction.joystickWASD.stickKeys == [0x57, 0x44, 0x53, 0x41]
         && ControlAction.joystickArrows.stickKeys == [0x26, 0x27, 0x28, 0x25], "the glyph does not change the keys a stick posts")
